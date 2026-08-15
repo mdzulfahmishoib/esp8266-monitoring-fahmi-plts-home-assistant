@@ -64,13 +64,24 @@ captive_portal:
 
 # ── UART ──────────────────────────────────────────────────────────────────────
 uart:
-  id: mppt_uart
-  tx_pin: GPIO27  
-  rx_pin: GPIO26
-  baud_rate: 2400
-  data_bits: 8
-  parity: NONE
-  stop_bits: 1
+  - id: mppt_uart
+    tx_pin: GPIO27  
+    rx_pin: GPIO26
+    baud_rate: 2400
+    data_bits: 8
+    parity: NONE
+    stop_bits: 1
+
+  - id: pzem_uart
+    tx_pin: GPIO33  # ESP32 TX (GPIO33) -> RX PZEM
+    rx_pin: GPIO32  # ESP32 RX (GPIO32) -> TX PZEM
+    baud_rate: 9600
+    stop_bits: 1
+
+# ── MODBUS (Untuk PZEM-004T) ──────────────────────────────────────────────────
+modbus:
+  - id: pzem_modbus
+    uart_id: pzem_uart
 
 # ── TIME (NTP WIB UTC+7) ──────────────────────────────────────────────────────
 time:
@@ -358,7 +369,7 @@ globals:
     restore_value: false
     initial_value: '-1'
 
-  # Halaman menu LCD aktif (0–4)
+  # Halaman menu LCD aktif (0–6)
   - id: menu_page
     type: int
     restore_value: false
@@ -379,7 +390,7 @@ text_sensor:
     update_interval: 5s
     lambda: |-
       if (id(motor_aktif)) {
-        return std::string("Tracking");
+        return std::string("Aktif");
       }
       return std::string("Standby");
 
@@ -389,9 +400,6 @@ text_sensor:
 
 # ============================================================
 #  SWITCH (Relay Kontrol Motor Solar Tracker)
-#  Konfigurasi PIN AMAN (Bebas dari gangguan boot):
-#  relay1 (Maju)   = D18 / GPIO18  (Sangat Aman ✅)
-#  relay2 (Mundur) = D19 / GPIO19  (Sangat Aman ✅)
 # ============================================================
 switch:
   - platform: gpio
@@ -400,7 +408,7 @@ switch:
     internal: true
     icon: mdi:arrow-right-bold
     pin:
-      number: GPIO19    
+      number: GPIO18    
       mode: OUTPUT
     restore_mode: ALWAYS_OFF
     interlock: [relay_mundur]   # Interlock: tidak bisa aktif bersamaan
@@ -422,7 +430,7 @@ switch:
     internal: true
     icon: mdi:arrow-left-bold
     pin:
-      number: GPIO18   
+      number: GPIO19   
       mode: OUTPUT
     restore_mode: ALWAYS_OFF
     interlock: [relay_maju]
@@ -498,7 +506,7 @@ switch:
       - globals.set: {id: mode_auto, value: 'false'}
       - globals.set: {id: sequence_mundur, value: 'false'}
 
-# ── BUTTON: Tombol manual sync waktu di HA ───────────────────────────────────
+# ── BUTTON ────────────────────────────────────────────────────────────────────
 button:
   - platform: template
     name: "Sync Time to MPPT"
@@ -507,15 +515,13 @@ button:
     on_press:
       - script.execute: sync_time_to_mppt
 
-  # Tombol 2: Restart Perangkat secara Aman
   - platform: restart
     id: btn_restart_esp
     name: "Restart ESP"
     icon: mdi:restart
 
-# ── INTERVAL: Request data dari MPPT setiap 5 detik ──────────────────────────
+# ── INTERVAL ──────────────────────────────────────────────────────────────────
 interval:
-  # 1. Tracker Otomatis setiap 330 detik (Baris 705)
   - interval: 330s
     then:
       - if:
@@ -524,7 +530,6 @@ interval:
               auto t = id(sntp_time).now();
               if (!t.is_valid()) return false;
               int h = t.hour;
-              // Aktif antara 10:00 - 16:00 & motor tidak sibuk
               return (h >= 10 && h < 16) && !id(motor_aktif);
           then:
             - globals.set:
@@ -541,7 +546,6 @@ interval:
 
   - interval: 5s
     then:
-      # Langkah 1+2: Bersihkan buffer lama & kirim command request telemetri
       - lambda: |-
           uint8_t flush_byte;
           while (id(mppt_uart).available()) id(mppt_uart).read_byte(&flush_byte);
@@ -550,12 +554,9 @@ interval:
             0x4D, 0x50, 0x50, 0x54, 0x48, 0x42
           };
           id(mppt_uart).write_array(cmd, sizeof(cmd));
-          ESP_LOGD("MPPT", "Request dikirim ke MPPT...");
 
-      # Langkah 3: Tunggu MPPT membalas
       - delay: 300ms
 
-      # Langkah 4: Baca respons & parse frame
       - lambda: |-
           uint8_t buf[128];
           int buf_len = 0;
@@ -570,10 +571,7 @@ interval:
             }
           }
 
-          if (buf_len == 0) {
-            ESP_LOGW("MPPT", "Tidak ada data dari MPPT!");
-            return;
-          }
+          if (buf_len == 0) return;
 
           const uint8_t HDR[] = {0x4D, 0x56, 0x4D, 0x50, 0x39};
           int h = -1;
@@ -586,15 +584,7 @@ interval:
             }
           }
 
-          if (h == -1) {
-            ESP_LOGW("MPPT", "Header tidak ditemukan! (buf_len=%d)", buf_len);
-            return;
-          }
-
-          if (buf_len - h < 60) {
-            ESP_LOGW("MPPT", "Frame tidak lengkap! (buf_len=%d, h=%d)", buf_len, h);
-            return;
-          }
+          if (h == -1 || buf_len - h < 60) return;
 
           auto B = [&](int pos) -> uint8_t { return buf[h + pos - 1]; };
 
@@ -614,13 +604,6 @@ interval:
           uint16_t tot_frac = B(33);
           id(g_total_kwh) = tot_int + (tot_frac / 10.0f);
 
-          ESP_LOGI("MPPT",
-            "PV:%.1fV | Bat:%.1fV | BatCap:%d%% | Chg:%.1fA | Pwr:%.1fW | MCU:%d°C | HS:%d°C | Day:%.3fkWh | Tot:%.1fkWh",
-            id(g_pv_voltage), id(g_battery_voltage), id(g_battery_capacity),
-            id(g_charge_current), id(g_pv_power),
-            id(g_mcu_temp), id(g_heatsink_temp),
-            id(g_daily_kwh), id(g_total_kwh));
-
           id(sensor_pv_voltage).publish_state(id(g_pv_voltage));
           id(sensor_battery_capacity).publish_state((float)id(g_battery_capacity));
           id(sensor_battery_voltage).publish_state(id(g_battery_voltage));
@@ -631,26 +614,46 @@ interval:
           id(sensor_daily_kwh).publish_state(id(g_daily_kwh));
           id(sensor_total_kwh).publish_state(id(g_total_kwh));
 
-  # 2. Rotasi Halaman LCD Setiap 5 detik
-  #    (lcd_pcf8574 tidak punya pages — cukup increment menu_page,
-  #     display lambda di bawah akan merender otomatis setiap 1s)
   - interval: 5s
     id: rotasi_lcd
     then:
       - lambda: |-
-          id(menu_page) = (id(menu_page) + 1) % 6;
+          id(menu_page) = (id(menu_page) + 1) % 7;
 
 # ============================================================
 #  LED INDIKATOR
-#  GPIO2 = D4 = Built-in LED ESP8266 (aktif LOW)
 # ============================================================
 status_led:
   pin:
     number: GPIO2
-    inverted: true
 
-# ── SENSOR: Publish ke Home Assistant ────────────────────────────────────────
+# ── SENSOR: Integration (MPPT + PZEM-004T) ────────────────────────────────────
 sensor:
+  # --- SENSOR PZEM-004T v3.0 (Address Custom 0x55) ---
+  - platform: pzemac
+    modbus_id: pzem_modbus
+    address: 0x55
+    voltage:
+      name: "AC Voltage"
+      id: pzem_voltage
+    current:
+      name: "AC Current"
+      id: pzem_current
+    power:
+      name: "AC Power"
+      id: pzem_power
+    energy:
+      name: "AC Energy"
+      id: pzem_energy
+    frequency:
+      name: "AC Frequency"
+      id: pzem_frequency
+    power_factor:
+      name: "AC Power Factor"
+      id: pzem_pf
+    update_interval: 2s
+
+  # --- SENSOR MPPT TEMPLATE ---
   - platform: template
     name: "PV Voltage"
     id: sensor_pv_voltage
@@ -823,8 +826,7 @@ display:
       char buf[17];
 
       switch (page) {
-        case 0: // Halaman Sensor Utama
-          // PERBAIKAN: Hapus .state pada id(g_battery_voltage), id(g_charge_current), id(g_pv_power), & id(g_daily_kwh)
+        case 0: // Halaman Sensor Utama MPPT
           it.printf(0, 0, "%.2fV  ", id(g_battery_voltage));
           it.printf(8, 0, "%.2fA  ", id(g_charge_current));
           it.printf(0, 1, "%.1fW  ", id(g_pv_power));
@@ -845,19 +847,26 @@ display:
           it.print(0, 1, buf);
           break;
 
-        case 3: // Halaman Hardware (Total kWh)
-          it.print(0, 0, "Total Energi:");
-          // PERBAIKAN: Hapus .state pada id(g_total_kwh)
-          it.printf(0, 1, "%.3f kWh", id(g_total_kwh));
+        case 3: // Halaman PZEM-004T Utama (V AC, I AC, Power AC, PF)
+          it.printf(0, 0, "%.1fV ", id(pzem_voltage).state);
+          it.printf(8, 0, "%.2fA ", id(pzem_current).state);
+          it.printf(0, 1, "%.1fW ", id(pzem_power).state);
+          it.printf(8, 1, "%.3fkWh: ", id(pzem_energy).state / 1000.0f);
           break;
 
-        case 4: // Halaman Relay/Tracker
+        case 4: // Halaman PZEM-004T Tambahan (Freq & AC Energy)
+          it.print(0, 0, "Freq: ");
+          it.print(8, 0, " PF: ");
+          it.printf(0, 1, "%.2fHz ", id(pzem_frequency));
+          it.printf(9, 1, "%.2f ", id(pzem_pf));
+          break;
+
+        case 5: // Halaman Relay/Tracker
           it.printf(0, 0, "Relay:%s", id(motor_aktif) ? "Aktif  " : "Mati   ");
-          // tracker_status_text adalah text_sensor, jadi .state.c_str() TETAP DIGUNAKAN
           it.printf(0, 1, "Tracker:%-7s", id(tracker_status_text).state.c_str());
           break;
 
-        case 5: // Halaman Jam
+        case 6: // Halaman Jam
           {
             it.print(1, 0, "Waktu Sekarang");
             auto t = id(sntp_time).now();
@@ -868,5 +877,4 @@ display:
             }
           }
           break;
-
       }
