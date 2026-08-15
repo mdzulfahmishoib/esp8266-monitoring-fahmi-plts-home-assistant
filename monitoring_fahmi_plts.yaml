@@ -1,0 +1,458 @@
+substitutions:
+  device_name: monitoring-fahmi-plts
+  friendly_name: "Monitoring Fahmi PLTS"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    priority: -100  # Jalankan setelah WiFi & NTP siap
+    then:
+      - delay: 15s   # Tunggu NTP sinkron dulu
+      - script.execute: sync_time_to_mppt
+
+# ── ESP32 CONFIGURATION ─────────────────────────────────────────────────────
+esp32:
+  board: esp32doit-devkit-v1
+
+# Logging ke Serial (USB)
+logger:
+  baud_rate: 115200
+  logs:
+    uart: WARN   # Sembunyikan spam timeout dari UART internal
+
+# Integrasi Home Assistant via API
+api:
+  encryption:
+    key: !secret api_encryption_key
+  # Expose service agar bisa dipanggil dari HA dashboard / automation
+  services:
+    - service: sync_time
+      then:
+        - script.execute: sync_time_to_mppt
+
+# OTA update
+ota:
+  - platform: esphome
+
+# WiFi
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Fallback AP jika gagal konek
+  ap:
+    ssid: "Monitoring-Fahmi-PLTS"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+# ── UART ──────────────────────────────────────────────────────────────────────
+uart:
+  id: mppt_uart
+  tx_pin: GPIO27  
+  rx_pin: GPIO26
+  baud_rate: 2400
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+
+# ── TIME (NTP WIB UTC+7) ──────────────────────────────────────────────────────
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Asia/Jakarta"
+    servers:
+      - pool.ntp.org
+      - time.nist.gov
+    on_time:
+      # Auto sync ke MPPT setiap hari jam 00:01 WIB
+      - hours: 0
+        minutes: 1
+        seconds: 0
+        then:
+          - script.execute: sync_time_to_mppt
+
+      # --- ROTASI DATA kWh & RESET WATT MAX (23:59:50 WIB) ---
+      - hours: 23
+        minutes: 59
+        seconds: 50
+        then:
+          - lambda: |-
+              float current_daily = id(sensor_daily_kwh).state;
+              if (!isnan(current_daily)) {
+                id(kwh_4hari) = id(kwh_3hari);
+                id(kwh_3hari) = id(kwh_2hari);
+                id(kwh_2hari) = id(kwh_kemarin);
+                id(kwh_kemarin) = current_daily;
+              }
+
+              id(watt_max) = 0.0;
+              id(sun_hour) = 0.0;
+
+              ESP_LOGI("DAILY_RESET", "Rotasi riwayat kWh & reset watt_max berhasil dijalankan!");
+
+# ── SCRIPT: Kirim waktu NTP ke MPPT ──────────────────────────────────────────
+script:
+  - id: sync_time_to_mppt
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+
+          // Pastikan NTP sudah valid (tahun >= 2022)
+          if (!now.is_valid() || now.year < 2022) {
+            ESP_LOGW("MPPT_SYNC", "NTP belum sinkron, sync dibatalkan! (year=%d)", now.year);
+            return;
+          }
+
+          uint16_t year   = now.year;
+          uint8_t  month  = now.month;
+          uint8_t  day    = now.day_of_month;
+          uint8_t  hour   = now.hour;
+          uint8_t  minute = now.minute;
+          uint8_t  second = now.second;
+
+          // Command Write Time 18 bytes (sesuai protokol Techfine)
+          uint8_t sync_cmd[18] = {
+            0x43, 0x54, 0x49, 0x4D, 0x0D,       // Fixed header "CTIM\r"
+            0x52, 0x45, 0x54, 0x49, 0x4D, 0x45, // Fixed data "RETIME"
+            (uint8_t)(year >> 8),                // Year high byte
+            (uint8_t)(year & 0xFF),              // Year low byte
+            month, day, hour, minute, second
+          };
+
+          // Bersihkan buffer UART sebelum kirim
+          uint8_t flush_byte;
+          while (id(mppt_uart).available()) id(mppt_uart).read_byte(&flush_byte);
+
+          id(mppt_uart).write_array(sync_cmd, sizeof(sync_cmd));
+
+          ESP_LOGI("MPPT_SYNC",
+            "Waktu berhasil dikirim ke MPPT: %04d-%02d-%02d %02d:%02d:%02d (WIB)",
+            year, month, day, hour, minute, second);
+
+# ── GLOBAL VARIABLES ──────────────────────────────────────────────────────────
+globals:
+  - id: g_pv_voltage
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_battery_voltage
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_charge_current
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_pv_power
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_mcu_temp
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: g_heatsink_temp
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: g_daily_kwh
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: g_total_kwh
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+  - id: g_battery_capacity
+    type: int
+    restore_value: no
+    initial_value: "0"
+    
+  - id: kwh_kemarin
+    type: float
+    restore_value: true
+    initial_value: '0.0'
+
+  - id: kwh_2hari
+    type: float
+    restore_value: true
+    initial_value: '0.0'
+
+  - id: kwh_3hari
+    type: float
+    restore_value: true
+    initial_value: '0.0'
+
+  - id: kwh_4hari
+    type: float
+    restore_value: true
+    initial_value: '0.0'
+
+  - id: watt_max
+    type: float
+    restore_value: false
+    initial_value: '0.0'
+
+  - id: sun_hour
+    type: float
+    restore_value: false
+    initial_value: '0.0'
+
+# ── BUTTON: Tombol manual sync waktu di HA ───────────────────────────────────
+button:
+  - platform: template
+    name: "Sync Time to MPPT"
+    id: btn_sync_time
+    icon: "mdi:clock-check-outline"
+    on_press:
+      - script.execute: sync_time_to_mppt
+
+# ── INTERVAL: Request data dari MPPT setiap 5 detik ──────────────────────────
+interval:
+  - interval: 5s
+    then:
+      # Langkah 1+2: Bersihkan buffer lama & kirim command request telemetri
+      - lambda: |-
+          uint8_t flush_byte;
+          while (id(mppt_uart).available()) id(mppt_uart).read_byte(&flush_byte);
+          const uint8_t cmd[] = {
+            0x43, 0x4D, 0x48, 0x42, 0x06,
+            0x4D, 0x50, 0x50, 0x54, 0x48, 0x42
+          };
+          id(mppt_uart).write_array(cmd, sizeof(cmd));
+          ESP_LOGD("MPPT", "Request dikirim ke MPPT...");
+
+      # Langkah 3: Tunggu MPPT membalas
+      - delay: 300ms
+
+      # Langkah 4: Baca respons & parse frame
+      - lambda: |-
+          uint8_t buf[128];
+          int buf_len = 0;
+          unsigned long t_start = millis();
+          while (millis() - t_start < 500 && buf_len < 128) {
+            if (id(mppt_uart).available()) {
+              uint8_t rx_byte;
+              id(mppt_uart).read_byte(&rx_byte);
+              buf[buf_len++] = rx_byte;
+            } else {
+              yield();
+            }
+          }
+
+          if (buf_len == 0) {
+            ESP_LOGW("MPPT", "Tidak ada data dari MPPT!");
+            return;
+          }
+
+          const uint8_t HDR[] = {0x4D, 0x56, 0x4D, 0x50, 0x39};
+          int h = -1;
+          for (int i = 0; i <= buf_len - 5; i++) {
+            if (buf[i]   == HDR[0] && buf[i+1] == HDR[1] &&
+                buf[i+2] == HDR[2] && buf[i+3] == HDR[3] &&
+                buf[i+4] == HDR[4]) {
+              h = i;
+              break;
+            }
+          }
+
+          if (h == -1) {
+            ESP_LOGW("MPPT", "Header tidak ditemukan! (buf_len=%d)", buf_len);
+            return;
+          }
+
+          if (buf_len - h < 60) {
+            ESP_LOGW("MPPT", "Frame tidak lengkap! (buf_len=%d, h=%d)", buf_len, h);
+            return;
+          }
+
+          auto B = [&](int pos) -> uint8_t { return buf[h + pos - 1]; };
+
+          id(g_pv_voltage) = (float) B(16);
+          id(g_battery_capacity) = (int) B(18);
+          id(g_battery_voltage) = (float)(((uint16_t)B(21) << 8) | B(20)) / 10.0f;
+          id(g_charge_current) = B(24) + (B(60) / 10.0f);
+          id(g_pv_power) = id(g_battery_voltage) * id(g_charge_current);
+          id(g_mcu_temp) = (int) B(25);
+          id(g_heatsink_temp) = (int) B(26);
+
+          uint16_t day_int  = ((uint16_t)B(29) << 8) | B(28);
+          uint16_t day_frac = ((uint16_t)B(31) << 8) | B(30);
+          id(g_daily_kwh) = day_int + (day_frac / 1000.0f);
+
+          uint16_t tot_int  = ((uint16_t)B(35) << 8) | B(34);
+          uint16_t tot_frac = B(33);
+          id(g_total_kwh) = tot_int + (tot_frac / 10.0f);
+
+          ESP_LOGI("MPPT",
+            "PV:%.1fV | Bat:%.1fV | BatCap:%d%% | Chg:%.1fA | Pwr:%.1fW | MCU:%d°C | HS:%d°C | Day:%.3fkWh | Tot:%.1fkWh",
+            id(g_pv_voltage), id(g_battery_voltage), id(g_battery_capacity),
+            id(g_charge_current), id(g_pv_power),
+            id(g_mcu_temp), id(g_heatsink_temp),
+            id(g_daily_kwh), id(g_total_kwh));
+
+          id(sensor_pv_voltage).publish_state(id(g_pv_voltage));
+          id(sensor_battery_capacity).publish_state((float)id(g_battery_capacity));
+          id(sensor_battery_voltage).publish_state(id(g_battery_voltage));
+          id(sensor_charge_current).publish_state(id(g_charge_current));
+          id(sensor_pv_power).publish_state(id(g_pv_power));
+          id(sensor_mcu_temp).publish_state((float)id(g_mcu_temp));
+          id(sensor_heatsink_temp).publish_state((float)id(g_heatsink_temp));
+          id(sensor_daily_kwh).publish_state(id(g_daily_kwh));
+          id(sensor_total_kwh).publish_state(id(g_total_kwh));
+
+# ── SENSOR: Publish ke Home Assistant ────────────────────────────────────────
+sensor:
+  - platform: template
+    name: "PV Voltage"
+    id: sensor_pv_voltage
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Battery Capacity"
+    id: sensor_battery_capacity
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:battery"
+
+  - platform: template
+    name: "Battery Voltage"
+    id: sensor_battery_voltage
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Charge Current"
+    id: sensor_charge_current
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "PV Power"
+    id: sensor_pv_power
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 1
+    lambda: |
+      if (id(sensor_pv_power).state > id(watt_max)) {
+        id(watt_max) = id(sensor_pv_power).state;
+      }
+      return id(sensor_pv_power).state;
+
+  - platform: template
+    name: "MCU Temperature"
+    id: sensor_mcu_temp
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Heatsink Temperature"
+    id: sensor_heatsink_temp
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Daily Energy"
+    id: sensor_daily_kwh
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 3
+
+  - platform: template
+    name: "Total Energy"
+    id: sensor_total_kwh
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Storage Charging Percentage"
+    id: sensor_storage_charge_pct
+    unit_of_measurement: "%"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: "mdi:battery-charging"
+
+  - platform: template
+    id: peak_sun_hour
+    name: "PLTS Peak Sun Hour"
+    icon: mdi:weather-sunny
+    unit_of_measurement: "jam"
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      id(sun_hour) = id(sensor_daily_kwh).state / 0.5;
+      return id(sun_hour);
+
+  - platform: template
+    id: watt_maximum
+    name: "PLTS Daya Maksimum"
+    icon: mdi:lightning-bolt-circle
+    unit_of_measurement: "W"
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return id(watt_max);
+
+  - platform: template
+    id: sensor_kwh_kemarin
+    name: "PLTS kWh Kemarin"
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total
+    accuracy_decimals: 3
+    update_interval: 60s
+    lambda: return id(kwh_kemarin);
+
+  - platform: template
+    id: sensor_kwh_2hari
+    name: "PLTS kWh 2 Hari Lalu"
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total
+    accuracy_decimals: 3
+    update_interval: 60s
+    lambda: return id(kwh_2hari);
+
+  - platform: template
+    id: sensor_kwh_3hari
+    name: "PLTS kWh 3 Hari Lalu"
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total
+    accuracy_decimals: 3
+    update_interval: 60s
+    lambda: return id(kwh_3hari);
+
+  - platform: template
+    id: sensor_kwh_4hari
+    name: "PLTS kWh 4 Hari Lalu"
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total
+    accuracy_decimals: 3
+    update_interval: 60s
+    lambda: return id(kwh_4hari);
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
