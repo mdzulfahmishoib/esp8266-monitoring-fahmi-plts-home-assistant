@@ -31,6 +31,22 @@ api:
       then:
         - script.execute: sync_time_to_mppt
 
+    # Service untuk kontrol motor tracker dari HA
+    - service: motor_maju_manual
+      then:
+        - switch.turn_on: relay_maju
+        - switch.turn_off: relay_mundur
+
+    - service: motor_mundur_manual
+      then:
+        - switch.turn_on: relay_mundur
+        - switch.turn_off: relay_maju
+
+    - service: motor_stop
+      then:
+        - switch.turn_off: relay_maju
+        - switch.turn_off: relay_mundur
+
 # OTA update
 ota:
   - platform: esphome
@@ -130,6 +146,63 @@ script:
             "Waktu berhasil dikirim ke MPPT: %04d-%02d-%02d %02d:%02d:%02d (WIB)",
             year, month, day, hour, minute, second);
 
+  - id: script_tracker_maju_5menit
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(motor_aktif);'
+          then:
+            - globals.set: {id: mode_auto, value: 'true'}
+            - switch.turn_off: relay_mundur
+            - switch.turn_on: relay_maju
+            - delay: 5min
+            - switch.turn_off: relay_maju
+            - globals.set: {id: mode_auto, value: 'false'}
+            - switch.turn_off: sw_tracker_maju_5menit
+          else:
+            - switch.turn_off: sw_tracker_maju_5menit
+
+  - id: script_tracker_mundur_5menit
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(motor_aktif);'
+          then:
+            - globals.set: {id: mode_auto, value: 'true'}
+            - switch.turn_off: relay_maju
+            - switch.turn_on: relay_mundur
+            - delay: 5min
+            - switch.turn_off: relay_mundur
+            - globals.set: {id: mode_auto, value: 'false'}
+            - switch.turn_off: sw_tracker_mundur_5menit
+          else:
+            - switch.turn_off: sw_tracker_mundur_5menit
+
+  - id: script_tracker_mendatar
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(motor_aktif);'
+          then:
+            - globals.set: {id: mode_auto, value: 'true'}
+            - globals.set: {id: sequence_mundur, value: 'true'}
+            - switch.turn_off: relay_mundur
+            - switch.turn_on: relay_maju
+            - delay: 5min
+            - switch.turn_off: relay_maju
+            - switch.turn_on: relay_mundur
+            - delay: 30s
+            - switch.turn_off: relay_mundur
+            - globals.set: {id: mode_auto, value: 'false'}
+            - globals.set: {id: sequence_mundur, value: 'false'}
+            - switch.turn_off: sw_tracker_mendatar
+          else:
+            - switch.turn_off: sw_tracker_mendatar
+
+
 # ── GLOBAL VARIABLES ──────────────────────────────────────────────────────────
 globals:
   - id: g_pv_voltage
@@ -200,6 +273,159 @@ globals:
     restore_value: false
     initial_value: '0.0'
 
+  - id: sudah_balik
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: motor_aktif
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: mode_auto
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: sequence_mundur
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: last_trigger_detik
+    type: int
+    restore_value: false
+    initial_value: '-1'
+
+# ============================================================
+#  TEXT SENSOR
+# ============================================================
+text_sensor:
+  - platform: template
+    id: tracker_status_text
+    name: "PLTS Tracker Status"
+    update_interval: 1s
+    lambda: |-
+      if (id(relay_maju).state)   return std::string("Maju");
+      if (id(relay_mundur).state) return std::string("Mundur");
+      return std::string("Standby");
+
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+
+# ============================================================
+#  SWITCH (Relay Kontrol Motor Solar Tracker)
+#  Konfigurasi PIN AMAN (Bebas dari gangguan boot):
+#  relay1 (Maju)   = D18 / GPIO18  (Sangat Aman ✅)
+#  relay2 (Mundur) = D19 / GPIO19  (Sangat Aman ✅)
+# ============================================================
+switch:
+  - platform: gpio
+    id: relay_maju
+    name: "Relay Maju"
+    internal: true
+    icon: mdi:arrow-right-bold
+    pin:
+      number: GPIO19    
+      mode: OUTPUT
+    restore_mode: ALWAYS_OFF
+    interlock: [relay_mundur]   # Interlock: tidak bisa aktif bersamaan
+    interlock_wait_time: 200ms
+    on_turn_on:
+      - globals.set:
+          id: motor_aktif
+          value: 'true'
+    on_turn_off:
+      - lambda: |-
+          if (!id(relay_mundur).state) {
+            id(motor_aktif) = false;
+            id(mode_auto) = false;
+          }
+
+  - platform: gpio
+    id: relay_mundur
+    name: "Relay Mundur"
+    internal: true
+    icon: mdi:arrow-left-bold
+    pin:
+      number: GPIO18   
+      mode: OUTPUT
+    restore_mode: ALWAYS_OFF
+    interlock: [relay_maju]
+    interlock_wait_time: 200ms
+    on_turn_on:
+      - globals.set:
+          id: motor_aktif
+          value: 'true'
+    on_turn_off:
+      - lambda: |-
+          if (!id(relay_maju).state) {
+            id(motor_aktif) = false;
+            id(mode_auto) = false;
+          }
+
+  - platform: template
+    name: "Tracker Maju"
+    id: sw_tracker_maju
+    icon: mdi:arrow-right-bold
+    lambda: |-
+      return id(relay_maju).state;
+    turn_on_action:
+      - switch.turn_on: relay_maju
+    turn_off_action:
+      - switch.turn_off: relay_maju
+
+  - platform: template
+    name: "Tracker Mundur"
+    id: sw_tracker_mundur
+    icon: mdi:arrow-left-bold
+    lambda: |-
+      return id(relay_mundur).state;
+    turn_on_action:
+      - switch.turn_on: relay_mundur
+    turn_off_action:
+      - switch.turn_off: relay_mundur
+
+  - platform: template
+    name: "Tracker Maju 5 Menit"
+    id: sw_tracker_maju_5menit
+    icon: mdi:arrow-right-bold-box
+    optimistic: true
+    turn_on_action:
+      - script.execute: script_tracker_maju_5menit
+    turn_off_action:
+      - script.stop: script_tracker_maju_5menit
+      - switch.turn_off: relay_maju
+      - globals.set: {id: mode_auto, value: 'false'}
+
+  - platform: template
+    name: "Tracker Mundur 5 Menit"
+    id: sw_tracker_mundur_5menit
+    icon: mdi:arrow-left-bold-box
+    optimistic: true
+    turn_on_action:
+      - script.execute: script_tracker_mundur_5menit
+    turn_off_action:
+      - script.stop: script_tracker_mundur_5menit
+      - switch.turn_off: relay_mundur
+      - globals.set: {id: mode_auto, value: 'false'}
+
+  - platform: template
+    name: "Posisikan PLTS Mendatar"
+    id: sw_tracker_mendatar
+    icon: mdi:swap-horizontal-bold
+    optimistic: true
+    turn_on_action:
+      - script.execute: script_tracker_mendatar
+    turn_off_action:
+      - script.stop: script_tracker_mendatar
+      - switch.turn_off: relay_maju
+      - switch.turn_off: relay_mundur
+      - globals.set: {id: mode_auto, value: 'false'}
+      - globals.set: {id: sequence_mundur, value: 'false'}
+
 # ── BUTTON: Tombol manual sync waktu di HA ───────────────────────────────────
 button:
   - platform: template
@@ -209,8 +435,38 @@ button:
     on_press:
       - script.execute: sync_time_to_mppt
 
+  # Tombol 2: Restart Perangkat secara Aman
+  - platform: restart
+    id: btn_restart_esp
+    name: "Restart ESP"
+    icon: mdi:restart
+
 # ── INTERVAL: Request data dari MPPT setiap 5 detik ──────────────────────────
 interval:
+  # 1. Tracker Otomatis setiap 330 detik (Baris 705)
+  - interval: 330s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              auto t = id(sntp_time).now();
+              if (!t.is_valid()) return false;
+              int h = t.hour;
+              // Aktif antara 10:00 - 16:00 & motor tidak sibuk
+              return (h >= 10 && h < 16) && !id(motor_aktif);
+          then:
+            - globals.set:
+                id: mode_auto
+                value: 'true'
+            - switch.turn_off: relay_mundur
+            - switch.turn_on: relay_maju
+            - delay: 1200ms
+            - switch.turn_off: relay_maju
+            - globals.set:
+                id: mode_auto
+                value: 'false'
+            - logger.log: "Tracker: Gerak Otomatis 1.2 detik"
+
   - interval: 5s
     then:
       # Langkah 1+2: Bersihkan buffer lama & kirim command request telemetri
