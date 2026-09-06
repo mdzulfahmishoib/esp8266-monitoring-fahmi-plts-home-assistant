@@ -6,31 +6,27 @@ esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
   on_boot:
-    priority: -100.0 # Dijalankan setelah semua komponen hardware (I2C/LCD) selesai setup
+    priority: -100.0
     then:
-      - delay: 15s # Tunggu sisa waktu sinkronisasi NTP (total 15s)
+      - delay: 15s
       - script.execute: sync_time_to_mppt
 
 # ── ESP32 CONFIGURATION ─────────────────────────────────────────────────────
 esp32:
   board: esp32doit-devkit-v1
 
-# Logging ke Serial (USB)
 logger:
   hardware_uart: UART0
   baud_rate: 0
   logs:
     uart: WARN
 
-# Integrasi Home Assistant via API
 api:
-  # Expose service agar bisa dipanggil dari HA dashboard / automation
   services:
     - service: sync_time
       then:
         - script.execute: sync_time_to_mppt
 
-    # Service untuk kontrol motor tracker dari HA
     - service: motor_maju_manual
       then:
         - switch.turn_on: relay_maju
@@ -46,15 +42,12 @@ api:
         - switch.turn_off: relay_maju
         - switch.turn_off: relay_mundur
 
-# OTA update
 ota:
   - platform: esphome
 
-# WiFi
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  # Fallback AP jika gagal konek
   ap:
     ssid: "Monitoring-Fahmi-PLTS"
     password: !secret fallback_ap_password
@@ -72,8 +65,8 @@ uart:
     stop_bits: 1
 
   - id: pzem_uart
-    tx_pin: GPIO33 # ESP32 TX (GPIO33) -> RX PZEM
-    rx_pin: GPIO32 # ESP32 RX (GPIO32) -> TX PZEM
+    tx_pin: GPIO33
+    rx_pin: GPIO32
     baud_rate: 9600
     stop_bits: 1
 
@@ -86,12 +79,22 @@ uart:
     stop_bits: 1
     rx_buffer_size: 512
 
-# ── MODBUS (Untuk PZEM-004T) ──────────────────────────────────────────────────
+# ── MODBUS ───────────────────────────────────────────────────────────────────
 modbus:
   - id: pzem_modbus
     uart_id: pzem_uart
 
-# ── TIME (NTP WIB UTC+7) ──────────────────────────────────────────────────────
+  # Modbus khusus untuk Huawei agar diatur oleh ESPHome secara otomatis (Non-blocking)
+  - id: huawei_modbus
+    uart_id: huawei_uart
+
+modbus_controller:
+  - id: huawei_controller
+    modbus_id: huawei_modbus
+    address: 214
+    update_interval: 5s
+
+# ── TIME ─────────────────────────────────────────────────────────────────────
 time:
   - platform: sntp
     id: sntp_time
@@ -100,18 +103,19 @@ time:
       - pool.ntp.org
       - time.nist.gov
     on_time:
-      # Auto sync ke MPPT setiap hari jam 00:01 WIB
       - hours: 0
         minutes: 1
         seconds: 0
         then:
           - script.execute: sync_time_to_mppt
 
-      # --- ROTASI DATA kWh & RESET WATT MAX (23:59:50 WIB) ---
       - hours: 23
         minutes: 59
         seconds: 50
         then:
+          - sensor.template.publish:
+              id: sensor_ac_daily_kwh
+              state: 0.0
           - lambda: |-
               float current_daily = id(sensor_daily_kwh).state;
               if (!isnan(current_daily)) {
@@ -120,13 +124,10 @@ time:
                 id(kwh_2hari) = id(kwh_kemarin);
                 id(kwh_kemarin) = current_daily;
               }
-
               id(watt_max) = 0.0;
               id(sun_hour) = 0.0;
-
               ESP_LOGI("DAILY_RESET", "Rotasi riwayat kWh & reset watt_max berhasil dijalankan!");
 
-      # ---- Matikan LCD & nolkan watt jam 18:00 ----
       - seconds: 0
         minutes: 0
         hours: 18
@@ -135,7 +136,6 @@ time:
               id: lcd_aktif
               value: "false"
 
-      # ---- Aktifkan LCD & watt jam 05:15 ----
       - seconds: 0
         minutes: 15
         hours: 5
@@ -144,7 +144,6 @@ time:
               id: lcd_aktif
               value: "true"
 
-      # ---- Tracker: Balik ke Timur jam 17:50 ----
       - seconds: 0
         minutes: 50
         hours: 17
@@ -153,16 +152,8 @@ time:
               condition:
                 lambda: "return !id(sudah_balik);"
               then:
-                - logger.log: "Balik ke Timur - 90 detik"
-                - switch.turn_off: relay_maju
-                - switch.turn_on: relay_mundur
-                - delay: 90s
-                - switch.turn_off: relay_mundur
-                - globals.set:
-                    id: sudah_balik
-                    value: "true"
+                - script.execute: script_balik_timur_5min
 
-      # ---- Tracker: Reset flag balik setiap jam 09:00 ----
       - seconds: 0
         minutes: 0
         hours: 9
@@ -172,7 +163,6 @@ time:
               value: "false"
           - logger.log: "Flag tracker di-reset"
 
-      # ---- Auto Restart jam 03:00 Pagi ----
       - seconds: 0
         minutes: 0
         hours: 3
@@ -188,14 +178,27 @@ i2c:
 
 # ── SCRIPT ───────────────────────────────────────────────────────────────────
 script:
+  - id: animation_strobe_wifi
+    mode: restart
+    then:
+      - light.turn_on: led_status
+      - delay: 200ms
+      - light.turn_off: led_status
+      - delay: 800ms
+
+  - id: animation_fast_blink
+    mode: restart
+    then:
+      - light.turn_on: led_status
+      - delay: 200ms
+      - light.turn_off: led_status
+
   - id: sync_time_to_mppt
     then:
       - lambda: |-
           auto now = id(sntp_time).now();
-
-          // Pastikan NTP sudah valid (tahun >= 2022)
           if (!now.is_valid() || now.year < 2022) {
-            ESP_LOGW("MPPT_SYNC", "NTP belum sinkron, sync dibatalkan! (year=%d)", now.year);
+            ESP_LOGW("MPPT_SYNC", "NTP belum sinkron, sync dibatalkan!");
             return;
           }
 
@@ -206,30 +209,34 @@ script:
           uint8_t  minute = now.minute;
           uint8_t  second = now.second;
 
-          // Command Write Time 18 bytes (sesuai protokol Techfine)
           uint8_t sync_cmd[18] = {
-            0x43, 0x54, 0x49, 0x4D, 0x0D,       // Fixed header "CTIM\r"
-            0x52, 0x45, 0x54, 0x49, 0x4D, 0x45, // Fixed data "RETIME"
-            (uint8_t)(year >> 8),                // Year high byte
-            (uint8_t)(year & 0xFF),              // Year low byte
+            0x43, 0x54, 0x49, 0x4D, 0x0D,
+            0x52, 0x45, 0x54, 0x49, 0x4D, 0x45,
+            (uint8_t)(year >> 8),
+            (uint8_t)(year & 0xFF),
             month, day, hour, minute, second
           };
 
-          // Bersihkan buffer UART sebelum kirim
           uint8_t flush_byte;
           while (id(mppt_uart).available()) id(mppt_uart).read_byte(&flush_byte);
 
-          // PULL HIGH DE/RE PIN DAHULU SEBELUM KIRIM (TRANSMIT MODE)
           id(de_re_pin).turn_on();
           delay(1);
           id(mppt_uart).write_array(sync_cmd, sizeof(sync_cmd));
           id(mppt_uart).flush();
-          // RETURN TO RECEIVE MODE
           id(de_re_pin).turn_off();
 
-          ESP_LOGI("MPPT_SYNC",
-            "Waktu berhasil dikirim ke MPPT: %04d-%02d-%02d %02d:%02d:%02d (WIB)",
-            year, month, day, hour, minute, second);
+          ESP_LOGI("MPPT_SYNC", "Waktu berhasil dikirim ke MPPT");
+
+  - id: script_balik_timur_5min
+    mode: restart
+    then:
+      - logger.log: "Balik ke Timur - 5min"
+      - switch.turn_off: relay_maju
+      - switch.turn_on: relay_mundur
+      - delay: 5min
+      - switch.turn_off: relay_mundur
+      - globals.set: { id: sudah_balik, value: "true" }
 
   - id: script_tracker_maju_5menit
     mode: restart
@@ -279,7 +286,7 @@ script:
             - delay: 5min
             - switch.turn_off: relay_maju
             - switch.turn_on: relay_mundur
-            - delay: 30s
+            - delay: 150s
             - switch.turn_off: relay_mundur
             - globals.set: { id: mode_auto, value: "false" }
             - globals.set: { id: sequence_mundur, value: "false" }
@@ -287,259 +294,148 @@ script:
           else:
             - switch.turn_off: sw_tracker_mendatar
 
+  - id: script_read_mppt_rx
+    mode: restart
+    then:
+      - delay: 300ms # Jeda aman (non-blocking) membiarkan data terisi di UART HW Buffer
+      - lambda: |-
+          uint8_t buf[128];
+          int buf_len = 0;
+
+          // BACA SECARA INSTAN TANPA LOOP MILLIS (Ini yang membuat hang sebelumnya)
+          while (id(mppt_uart).available()) {
+            uint8_t rx_byte;
+            id(mppt_uart).read_byte(&rx_byte);
+            if (buf_len < 128) {
+              buf[buf_len++] = rx_byte;
+            }
+          }
+
+          if (buf_len < 60) return; // Mengabaikan jika data terlalu pendek
+
+          const uint8_t HDR[] = {0x4D, 0x56, 0x4D, 0x50, 0x39};
+          int h = -1;
+          for (int i = 0; i <= buf_len - 5; i++) {
+            if (buf[i]   == HDR[0] && buf[i+1] == HDR[1] &&
+                buf[i+2] == HDR[2] && buf[i+3] == HDR[3] &&
+                buf[i+4] == HDR[4]) {
+              h = i;
+              break;
+            }
+          }
+
+          if (h == -1 || (buf_len - h) < 60) return;
+          auto B = [&](int pos) -> uint8_t { return buf[h + pos - 1]; };
+
+          // --- MEMBACA DAN MEMVALIDASI DATA ---
+          float pv_v = (float) B(16);
+          int bat_cap = (int) B(18);
+          float bat_v = (float)(((uint16_t)B(21) << 8) | B(20)) / 10.0f;
+          float chg_i = B(24) + (B(60) / 10.0f);
+          int mcu_t = (int) B(25);
+          int hs_t = (int) B(26);
+
+          uint16_t day_int  = ((uint16_t)B(29) << 8) | B(28);
+          uint16_t day_frac = ((uint16_t)B(31) << 8) | B(30);
+          float daily_k = day_int + (day_frac / 1000.0f);
+
+          uint16_t tot_int  = ((uint16_t)B(35) << 8) | B(34);
+          uint16_t tot_frac = B(33);
+          float total_k = tot_int + (tot_frac / 10.0f);
+
+          if (bat_v > 100.0f || pv_v > 200.0f || bat_cap > 100 || mcu_t > 120 || hs_t > 120) {
+            ESP_LOGW("MPPT_READ", "Data corrupt terdeteksi dan diabaikan!");
+            return;
+          }
+
+          // Publish Langsung ke Sensor (Variabel Global MPPT dihapus untuk hemat memori)
+          id(sensor_pv_voltage).publish_state(pv_v);
+          id(sensor_battery_capacity).publish_state((float)bat_cap);
+          id(sensor_battery_voltage).publish_state(bat_v);
+          id(sensor_charge_current).publish_state(chg_i);
+          id(sensor_pv_power).publish_state(bat_v * chg_i);
+          id(sensor_mcu_temp).publish_state((float)mcu_t);
+          id(sensor_heatsink_temp).publish_state((float)hs_t);
+          id(sensor_daily_kwh).publish_state(daily_k);
+          id(sensor_total_kwh).publish_state(total_k);
+
 # ── GLOBAL VARIABLES ──────────────────────────────────────────────────────────
 globals:
-  - id: g_pv_voltage
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-  - id: g_battery_voltage
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-  - id: g_charge_current
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-  - id: g_pv_power
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-  - id: g_mcu_temp
-    type: int
-    restore_value: no
-    initial_value: "0"
-  - id: g_heatsink_temp
-    type: int
-    restore_value: no
-    initial_value: "0"
-  - id: g_daily_kwh
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-  - id: g_total_kwh
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
-  - id: g_battery_capacity
-    type: int
-    restore_value: no
-    initial_value: "0"
-
+  # Tersisa hanya yang benar-benar dibutuhkan oleh sistem rotasi & trigger harian
   - id: kwh_kemarin
     type: float
-    restore_value: true
+    restore_value: false
     initial_value: "0.0"
-
   - id: kwh_2hari
     type: float
-    restore_value: true
+    restore_value: false
     initial_value: "0.0"
-
   - id: kwh_3hari
     type: float
-    restore_value: true
+    restore_value: false
     initial_value: "0.0"
-
   - id: kwh_4hari
     type: float
-    restore_value: true
+    restore_value: false
     initial_value: "0.0"
-
   - id: watt_max
     type: float
     restore_value: false
     initial_value: "0.0"
-
   - id: sun_hour
     type: float
     restore_value: false
     initial_value: "0.0"
-
   - id: sudah_balik
     type: bool
     restore_value: false
     initial_value: "false"
-
   - id: motor_aktif
     type: bool
     restore_value: false
     initial_value: "false"
-
   - id: mode_auto
     type: bool
     restore_value: false
     initial_value: "false"
-
   - id: sequence_mundur
     type: bool
     restore_value: false
     initial_value: "false"
-
-  - id: last_trigger_detik
-    type: int
-    restore_value: false
-    initial_value: "-1"
-
-  # Halaman menu LCD aktif (0–6)
   - id: menu_page
     type: int
     restore_value: false
     initial_value: "0"
-
   - id: lcd_aktif
     type: bool
     restore_value: false
     initial_value: "true"
 
-  # ----------------------------------------------------------
-  # HUAWEI BATTERY GLOBALS
-  # ----------------------------------------------------------
-  - id: battery_voltage_value
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
-  - id: battery_current_value
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
-  - id: busbar_voltage_value
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
-  - id: soc_value
-    type: uint16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: soh_value
-    type: uint16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: max_cell_temp_value
-    type: int16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: min_cell_temp_value
-    type: int16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: module_mode_value
-    type: uint16_t
-    restore_value: no
-    initial_value: "65535"
-
-  - id: min_cell_voltage_value
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
-  - id: max_cell_voltage_value
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
-  - id: diff_cell_voltage_value
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
-  - id: discharge_times_value
-    type: uint32_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: discharge_ah_value
-    type: uint32_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: discharge_wh_value
-    type: uint32_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: runtime_hour_value
-    type: uint32_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: accumulated_cycles_value
-    type: uint16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: manufacturer_value
-    type: uint16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: software_id_value
-    type: uint16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: battery_capacity_value
-    type: uint16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: output_power_value
-    type: uint16_t
-    restore_value: no
-    initial_value: "0"
-
-  - id: external_busbar_voltage_value
-    type: float
-    restore_value: no
-    initial_value: "0.0"
-
-  - id: battery_model_value
-    type: std::string
-    restore_value: no
-    initial_value: '""'
-
-# ============================================================
-#  TEXT SENSOR
-# ============================================================
+# ── TEXT SENSOR ───────────────────────────────────────────────────────────────
 text_sensor:
   - platform: template
     id: tracker_status_text
     name: "PLTS Tracker Status"
     update_interval: 5s
     lambda: |-
-      if (id(motor_aktif)) {
-        return std::string("Aktif");
-      }
+      if (id(motor_aktif)) return std::string("Aktif");
       return std::string("Standby");
 
   - platform: wifi_info
     ip_address:
       name: "IP Address"
 
-  # Huawei Battery Text Sensors
   - platform: template
     name: "Huawei Battery Model"
     id: battery_model
     icon: mdi:battery-alert
-    update_interval: never
 
   - platform: template
     name: "Huawei Battery Module Mode"
     id: battery_module_mode
     icon: mdi:battery-sync
-    update_interval: never
 
-# ============================================================
-#  SWITCH (Relay Kontrol Motor & Pin DE/RE RS485 MPPT)
-# ============================================================
+# ── SWITCH ────────────────────────────────────────────────────────────────────
 switch:
   - platform: gpio
     pin: GPIO25
@@ -555,12 +451,10 @@ switch:
       number: GPIO19
       mode: OUTPUT
     restore_mode: ALWAYS_OFF
-    interlock: [relay_mundur] # Interlock: tidak bisa aktif bersamaan
+    interlock: [relay_mundur]
     interlock_wait_time: 200ms
     on_turn_on:
-      - globals.set:
-          id: motor_aktif
-          value: "true"
+      - globals.set: { id: motor_aktif, value: "true" }
     on_turn_off:
       - lambda: |-
           if (!id(relay_mundur).state) {
@@ -580,9 +474,7 @@ switch:
     interlock: [relay_maju]
     interlock_wait_time: 200ms
     on_turn_on:
-      - globals.set:
-          id: motor_aktif
-          value: "true"
+      - globals.set: { id: motor_aktif, value: "true" }
     on_turn_off:
       - lambda: |-
           if (!id(relay_maju).state) {
@@ -594,8 +486,7 @@ switch:
     name: "Tracker Maju"
     id: sw_tracker_maju
     icon: mdi:arrow-right-bold
-    lambda: |-
-      return id(relay_maju).state;
+    lambda: "return id(relay_maju).state;"
     turn_on_action:
       - switch.turn_on: relay_maju
     turn_off_action:
@@ -605,8 +496,7 @@ switch:
     name: "Tracker Mundur"
     id: sw_tracker_mundur
     icon: mdi:arrow-left-bold
-    lambda: |-
-      return id(relay_mundur).state;
+    lambda: "return id(relay_mundur).state;"
     turn_on_action:
       - switch.turn_on: relay_mundur
     turn_off_action:
@@ -658,14 +548,36 @@ button:
     icon: "mdi:clock-check-outline"
     on_press:
       - script.execute: sync_time_to_mppt
-
   - platform: restart
     id: btn_restart_esp
     name: "Restart ESP"
     icon: mdi:restart
+  - platform: template
+    name: "Reset PZEM AC Energy"
+    id: btn_reset_pzem_energy
+    icon: "mdi:lightning-bolt"
+    on_press:
+      - pzemac.reset_energy: pzem_sensor
 
 # ── INTERVAL ──────────────────────────────────────────────────────────────────
 interval:
+  - interval: 1000ms
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - script.execute: animation_strobe_wifi
+
+  - interval: 200ms
+    then:
+      - if:
+          condition:
+            not:
+              wifi.connected:
+          then:
+            - script.execute: animation_fast_blink
+
   - interval: 330s
     then:
       - if:
@@ -676,17 +588,12 @@ interval:
               int h = t.hour;
               return (h >= 10 && h < 16) && !id(motor_aktif);
           then:
-            - globals.set:
-                id: mode_auto
-                value: "true"
+            - globals.set: { id: mode_auto, value: "true" }
             - switch.turn_off: relay_mundur
             - switch.turn_on: relay_maju
-            - delay: 1200ms
+            - delay: 2400ms
             - switch.turn_off: relay_maju
-            - globals.set:
-                id: mode_auto
-                value: "false"
-            - logger.log: "Tracker: Gerak Otomatis 1.2 detik"
+            - globals.set: { id: mode_auto, value: "false" }
 
   - interval: 5s
     then:
@@ -694,77 +601,13 @@ interval:
           uint8_t flush_byte;
           while (id(mppt_uart).available()) id(mppt_uart).read_byte(&flush_byte);
 
-          const uint8_t cmd[] = {
-            0x43, 0x4D, 0x48, 0x42, 0x06,
-            0x4D, 0x50, 0x50, 0x54, 0x48, 0x42
-          };
-
-          // SET HIGH DE/RE UNTUK TRANSMIT
+          const uint8_t cmd[] = {0x43, 0x4D, 0x48, 0x42, 0x06, 0x4D, 0x50, 0x50, 0x54, 0x48, 0x42};
           id(de_re_pin).turn_on();
           delay(1);
           id(mppt_uart).write_array(cmd, sizeof(cmd));
           id(mppt_uart).flush();
-          // RETURN LOW UNTUK RECEIVE
           id(de_re_pin).turn_off();
-
-      - delay: 300ms
-
-      - lambda: |-
-          uint8_t buf[128];
-          int buf_len = 0;
-          unsigned long t_start = millis();
-          while (millis() - t_start < 500 && buf_len < 128) {
-            if (id(mppt_uart).available()) {
-              uint8_t rx_byte;
-              id(mppt_uart).read_byte(&rx_byte);
-              buf[buf_len++] = rx_byte;
-            } else {
-              yield();
-            }
-          }
-
-          if (buf_len == 0) return;
-
-          const uint8_t HDR[] = {0x4D, 0x56, 0x4D, 0x50, 0x39};
-          int h = -1;
-          for (int i = 0; i <= buf_len - 5; i++) {
-            if (buf[i]   == HDR[0] && buf[i+1] == HDR[1] &&
-                buf[i+2] == HDR[2] && buf[i+3] == HDR[3] &&
-                buf[i+4] == HDR[4]) {
-              h = i;
-              break;
-            }
-          }
-
-          if (h == -1 || buf_len - h < 60) return;
-
-          auto B = [&](int pos) -> uint8_t { return buf[h + pos - 1]; };
-
-          id(g_pv_voltage) = (float) B(16);
-          id(g_battery_capacity) = (int) B(18);
-          id(g_battery_voltage) = (float)(((uint16_t)B(21) << 8) | B(20)) / 10.0f;
-          id(g_charge_current) = B(24) + (B(60) / 10.0f);
-          id(g_pv_power) = id(g_battery_voltage) * id(g_charge_current);
-          id(g_mcu_temp) = (int) B(25);
-          id(g_heatsink_temp) = (int) B(26);
-
-          uint16_t day_int  = ((uint16_t)B(29) << 8) | B(28); // Disesuaikan posisi byte day_int
-          uint16_t day_frac = ((uint16_t)B(31) << 8) | B(30);
-          id(g_daily_kwh) = day_int + (day_frac / 1000.0f);
-
-          uint16_t tot_int  = ((uint16_t)B(35) << 8) | B(34);
-          uint16_t tot_frac = B(33);
-          id(g_total_kwh) = tot_int + (tot_frac / 10.0f);
-
-          id(sensor_pv_voltage).publish_state(id(g_pv_voltage));
-          id(sensor_battery_capacity).publish_state((float)id(g_battery_capacity));
-          id(sensor_battery_voltage).publish_state(id(g_battery_voltage));
-          id(sensor_charge_current).publish_state(id(g_charge_current));
-          id(sensor_pv_power).publish_state(id(g_pv_power));
-          id(sensor_mcu_temp).publish_state((float)id(g_mcu_temp));
-          id(sensor_heatsink_temp).publish_state((float)id(g_heatsink_temp));
-          id(sensor_daily_kwh).publish_state(id(g_daily_kwh));
-          id(sensor_total_kwh).publish_state(id(g_total_kwh));
+      - script.execute: script_read_mppt_rx
 
   - interval: 5s
     id: rotasi_lcd
@@ -772,257 +615,79 @@ interval:
       - lambda: |-
           id(menu_page) = (id(menu_page) + 1) % 7;
 
-  # Huawei RS485 Battery Polling Interval
-  - interval: 5s
-    then:
-      - lambda: |-
-          const uint8_t SLAVE_ADDRESS = 214;
-          const uint16_t MODBUS_TIMEOUT_MS = 500;
+# ── OUTPUT & LIGHT CONFIGURATION ──────────────────────────────────────────────
+output:
+  - platform: gpio
+    pin: GPIO2
+    id: led_status_gpio
 
-          auto modbus_crc16 = [](const uint8_t *buffer, int length) -> uint16_t {
-            uint16_t crc = 0xFFFF;
-            for (int pos = 0; pos < length; pos++) {
-              crc ^= buffer[pos];
-              for (int i = 0; i < 8; i++) {
-                if (crc & 0x0001) {
-                  crc >>= 1;
-                  crc ^= 0xA001;
-                } else {
-                  crc >>= 1;
-                }
-              }
-            }
-            return crc;
-          };
-
-          auto read_registers = [&](uint16_t start_address, uint16_t number_of_registers, uint16_t *output) -> bool {
-            if (number_of_registers == 0 || number_of_registers > 32) return false;
-
-            uint8_t request[8];
-            request[0] = SLAVE_ADDRESS;
-            request[1] = 0x03;
-            request[2] = (start_address >> 8) & 0xFF;
-            request[3] = start_address & 0xFF;
-            request[4] = (number_of_registers >> 8) & 0xFF;
-            request[5] = number_of_registers & 0xFF;
-
-            uint16_t crc = modbus_crc16(request, 6);
-            request[6] = crc & 0xFF;
-            request[7] = (crc >> 8) & 0xFF;
-
-            while (id(huawei_uart)->available()) {
-              uint8_t dummy;
-              id(huawei_uart)->read_byte(&dummy);
-            }
-
-            id(huawei_uart)->write_array(request, 8);
-            id(huawei_uart)->flush();
-
-            uint8_t response[256];
-            int index = 0;
-            uint32_t start_time = millis();
-            uint32_t last_byte_time = millis();
-
-            while (millis() - start_time < MODBUS_TIMEOUT_MS) {
-              if (id(huawei_uart)->available()) {
-                uint8_t byte;
-                if (id(huawei_uart)->read_byte(&byte)) {
-                  if (index < 256) response[index++] = byte;
-                  last_byte_time = millis();
-                }
-              } else {
-                if (index >= 5 && millis() - last_byte_time > 20) break;
-                delay(1);
-              }
-            }
-
-            if (index < 5 || response[0] != SLAVE_ADDRESS || response[1] != 0x03) return false;
-
-            uint8_t byte_count = response[2];
-            if (byte_count != number_of_registers * 2) return false;
-
-            int expected_length = 3 + byte_count + 2;
-            if (index < expected_length) return false;
-
-            uint16_t received_crc = response[expected_length - 2] | (response[expected_length - 1] << 8);
-            uint16_t calculated_crc = modbus_crc16(response, expected_length - 2);
-            if (received_crc != calculated_crc) return false;
-
-            for (int i = 0; i < number_of_registers; i++) {
-              output[i] = ((uint16_t) response[3 + i * 2] << 8) | response[3 + i * 2 + 1];
-            }
-            return true;
-          };
-
-          auto decode_ascii = [](uint16_t *regs, int count) -> std::string {
-            std::string result;
-            for (int i = 0; i < count; i++) {
-              if (regs[i] == 0xFFFF) break;
-              uint8_t high = (regs[i] >> 8) & 0xFF;
-              uint8_t low = regs[i] & 0xFF;
-              if (high >= 0x20 && high <= 0x7E) result += (char) high;
-              if (low >= 0x20 && low <= 0x7E) result += (char) low;
-            }
-            return result;
-          };
-
-          uint16_t regs[32];
-          bool all_ok = true;
-
-          // BLOCK 1
-          if (read_registers(0x0000, 15, regs)) {
-            id(busbar_voltage_value) = regs[0] * 0.01f;
-            id(battery_voltage_value) = regs[1] * 0.01f;
-            id(battery_current_value) = ((int16_t) regs[2]) * 0.01f;
-            id(soc_value) = regs[3];
-            id(soh_value) = regs[4];
-            id(max_cell_temp_value) = (int16_t) regs[5];
-            id(min_cell_temp_value) = (int16_t) regs[6];
-            id(module_mode_value) = regs[14];
-          } else { all_ok = false; }
-          delay(30);
-
-          // BLOCK 2
-          if (read_registers(0x0012, 16, regs)) {
-            // Processed directly if needed
-          } else { all_ok = false; }
-          delay(30);
-
-          // BLOCK 3 (CELL VOLTAGE SUMMARY)
-          if (read_registers(0x0022, 16, regs)) {
-            float min_voltage = 999.0f;
-            float max_voltage = -999.0f;
-            for (int i = 0; i < 16; i++) {
-              if (regs[i] != 0xFFFF) {
-                float v = regs[i] * 0.001f;
-                if (v > 0.0f) {
-                  if (v < min_voltage) min_voltage = v;
-                  if (v > max_voltage) max_voltage = v;
-                }
-              }
-            }
-            if (max_voltage >= min_voltage) {
-              id(min_cell_voltage_value) = min_voltage;
-              id(max_cell_voltage_value) = max_voltage;
-              id(diff_cell_voltage_value) = (max_voltage - min_voltage) * 1000.0f;
-            }
-          } else { all_ok = false; }
-          delay(30);
-
-          // BLOCK 4
-          if (read_registers(0x0042, 9, regs)) {
-            id(discharge_times_value) = ((uint32_t) regs[0] << 16) | regs[1];
-            id(discharge_ah_value) = ((uint32_t) regs[2] << 16) | regs[3];
-          } else { all_ok = false; }
-          delay(30);
-
-          // BLOCK 5
-          if (read_registers(0x0101, 15, regs)) {
-            id(manufacturer_value) = regs[4];
-            id(software_id_value) = regs[5];
-            id(battery_capacity_value) = regs[6];
-          } else { all_ok = false; }
-          delay(30);
-
-          // BLOCK 6
-          if (read_registers(0x0204, 7, regs)) {
-            id(output_power_value) = regs[0];
-            id(external_busbar_voltage_value) = regs[1] * 0.01f;
-            id(runtime_hour_value) = ((uint32_t) regs[5] << 16) | regs[6];
-          } else { all_ok = false; }
-          delay(30);
-
-          // BLOCK 8
-          if (read_registers(0x0332, 18, regs)) {
-            id(battery_model_value) = decode_ascii(regs, 12);
-            id(discharge_wh_value) = ((uint32_t) regs[16] << 16) | regs[17];
-          } else { all_ok = false; }
-
-          // ACCUMULATED CYCLE
-          float nominal_capacity = id(battery_capacity_value) > 0 ? (float) id(battery_capacity_value) : 100.0f;
-          const float efficiency_factor = 0.74f;
-          id(accumulated_cycles_value) = (uint16_t) round((float) id(discharge_ah_value) / (nominal_capacity * efficiency_factor));
-
-          // PUBLISH BASIC DATA
-          id(hw_battery_voltage)->publish_state(id(battery_voltage_value));
-          id(hw_battery_current)->publish_state(id(battery_current_value));
-          id(hw_battery_power)->publish_state(id(battery_voltage_value) * id(battery_current_value));
-          id(hw_battery_soc)->publish_state(id(soc_value));
-          id(hw_battery_soh)->publish_state(id(soh_value));
-          id(hw_battery_busbar_voltage)->publish_state(id(busbar_voltage_value));
-
-          // CELL SUMMARY
-          id(hw_battery_min_cell_voltage)->publish_state(id(min_cell_voltage_value));
-          id(hw_battery_max_cell_voltage)->publish_state(id(max_cell_voltage_value));
-          id(hw_battery_cell_voltage_difference)->publish_state(id(diff_cell_voltage_value));
-          id(hw_battery_max_cell_temperature)->publish_state(id(max_cell_temp_value));
-          id(hw_battery_min_cell_temperature)->publish_state(id(min_cell_temp_value));
-
-          // DISCHARGE
-          id(hw_battery_discharge_ah)->publish_state(id(discharge_ah_value));
-          id(hw_battery_discharge_wh)->publish_state(id(discharge_wh_value));
-          id(hw_battery_discharge_times)->publish_state(id(discharge_times_value));
-          id(hw_battery_runtime)->publish_state(id(runtime_hour_value));
-          id(hw_battery_accumulated_cycles)->publish_state(id(accumulated_cycles_value));
-
-          // BATTERY INFORMATION
-          id(hw_battery_capacity)->publish_state(id(battery_capacity_value));
-          id(hw_battery_output_power)->publish_state(id(output_power_value));
-          id(hw_battery_external_busbar_voltage)->publish_state(id(external_busbar_voltage_value));
-
-          // TEXT SENSORS
-          id(battery_model)->publish_state(id(battery_model_value));
-
-          std::string mode_text;
-          switch (id(module_mode_value)) {
-            case 0: mode_text = "Hibernating"; break;
-            case 1: mode_text = "Low Power"; break;
-            case 2: mode_text = "Charging"; break;
-            case 3: mode_text = "Discharging"; break;
-            case 4: mode_text = "Standby"; break;
-            default: mode_text = "Unknown"; break;
-          }
-          id(battery_module_mode)->publish_state(mode_text);
-
-          ESP_LOGI("huawei", "Battery | V=%.2f V | I=%.2f A | SOC=%u %% | SOH=%u %% | Cycles=%u",
-                   id(battery_voltage_value), id(battery_current_value), id(soc_value), id(soh_value), id(accumulated_cycles_value));
-
-# ============================================================
-#  LED INDIKATOR
-# ============================================================
-status_led:
-  pin:
-    number: GPIO2
+light:
+  - platform: binary
+    output: led_status_gpio
+    id: led_status
 
 # ── SENSOR ────────────────────────────────────────────────────────────────────
 sensor:
-  # --- SENSOR PZEM-004T v3.0 (Address Custom 0x55) ---
+  - platform: total_daily_energy
+    name: "AC Daily Energy Consumption"
+    id: sensor_ac_daily_kwh
+    power_id: pzem_power
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 3
+    icon: "mdi:lightning-bolt"
+    time_id: sntp_time
+    restore: false
+    filters:
+      - multiply: 0.001
+
   - platform: pzemac
+    id: pzem_sensor
     modbus_id: pzem_modbus
     address: 0x55
     voltage:
       name: "AC Voltage"
       id: pzem_voltage
+      filters:
+        - lambda: "return std::isnan(x) ? 0.0 : x;"
+        - clamp:
+            { min_value: 150.0, max_value: 270.0, ignore_out_of_range: true }
     current:
       name: "AC Current"
       id: pzem_current
+      filters:
+        - lambda: "return std::isnan(x) ? 0.0 : x;"
+        - clamp: { min_value: 0.0, max_value: 100.0, ignore_out_of_range: true }
     power:
       name: "AC Power"
       id: pzem_power
+      filters:
+        - skip_initial: 3
+        - lambda: "return std::isnan(x) ? 0.0 : x;"
+        - clamp:
+            { min_value: 0.0, max_value: 25000.0, ignore_out_of_range: true }
     energy:
       name: "AC Energy"
       id: pzem_energy
+      unit_of_measurement: "kWh"
+      accuracy_decimals: 3
+      filters:
+        - multiply: 0.001
     frequency:
       name: "AC Frequency"
       id: pzem_frequency
+      filters:
+        - lambda: "return std::isnan(x) ? 0.0 : x;"
     power_factor:
       name: "AC Power Factor"
       id: pzem_pf
+      icon: mdi:math-cos
+      filters:
+        - lambda: "return std::isnan(x) ? 0.0 : x;"
     update_interval: 2s
 
-  # --- SENSOR MPPT TEMPLATE ---
+  # --- MPPT SENSORS ---
   - platform: template
-    name: "PV Voltage"
+    name: "MPPT PV Voltage"
     id: sensor_pv_voltage
     unit_of_measurement: "V"
     device_class: voltage
@@ -1030,7 +695,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Battery Capacity"
+    name: "MPPT Battery Capacity"
     id: sensor_battery_capacity
     unit_of_measurement: "%"
     device_class: battery
@@ -1039,7 +704,7 @@ sensor:
     icon: "mdi:battery"
 
   - platform: template
-    name: "Battery Voltage"
+    name: "MPPT Battery Voltage"
     id: sensor_battery_voltage
     unit_of_measurement: "V"
     device_class: voltage
@@ -1047,7 +712,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "Charge Current"
+    name: "MPPT Charge Current"
     id: sensor_charge_current
     unit_of_measurement: "A"
     device_class: current
@@ -1055,7 +720,7 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
-    name: "PV Power"
+    name: "MPPT PV Power"
     id: sensor_pv_power
     unit_of_measurement: "W"
     device_class: power
@@ -1068,7 +733,7 @@ sensor:
       return id(sensor_pv_power).state;
 
   - platform: template
-    name: "MCU Temperature"
+    name: "MPPT MCU Temperature"
     id: sensor_mcu_temp
     unit_of_measurement: "°C"
     device_class: temperature
@@ -1076,7 +741,7 @@ sensor:
     accuracy_decimals: 0
 
   - platform: template
-    name: "Heatsink Temperature"
+    name: "MPPT Heatsink Temperature"
     id: sensor_heatsink_temp
     unit_of_measurement: "°C"
     device_class: temperature
@@ -1084,7 +749,7 @@ sensor:
     accuracy_decimals: 0
 
   - platform: template
-    name: "Daily Energy"
+    name: "MPPT Daily Energy"
     id: sensor_daily_kwh
     unit_of_measurement: "kWh"
     device_class: energy
@@ -1092,7 +757,7 @@ sensor:
     accuracy_decimals: 3
 
   - platform: template
-    name: "Total Energy"
+    name: "MPPT Total Energy"
     id: sensor_total_kwh
     unit_of_measurement: "kWh"
     device_class: energy
@@ -1101,7 +766,7 @@ sensor:
 
   - platform: template
     id: peak_sun_hour
-    name: "PLTS Peak Sun Hour"
+    name: "MPPT Peak Sun Hour"
     icon: mdi:weather-sunny
     unit_of_measurement: "jam"
     state_class: measurement
@@ -1113,7 +778,7 @@ sensor:
 
   - platform: template
     id: watt_maximum
-    name: "PLTS Daya Maksimum"
+    name: "MPPT Daya Maksimum"
     icon: mdi:lightning-bolt-circle
     unit_of_measurement: "W"
     state_class: measurement
@@ -1123,37 +788,34 @@ sensor:
 
   - platform: template
     id: sensor_kwh_kemarin
-    name: "PLTS kWh Kemarin"
+    name: "MPPT kWh Kemarin"
     unit_of_measurement: "kWh"
     device_class: energy
     state_class: total
     accuracy_decimals: 3
     update_interval: 60s
     lambda: return id(kwh_kemarin);
-
   - platform: template
     id: sensor_kwh_2hari
-    name: "PLTS kWh 2 Hari Lalu"
+    name: "MPPT kWh 2 Hari Lalu"
     unit_of_measurement: "kWh"
     device_class: energy
     state_class: total
     accuracy_decimals: 3
     update_interval: 60s
     lambda: return id(kwh_2hari);
-
   - platform: template
     id: sensor_kwh_3hari
-    name: "PLTS kWh 3 Hari Lalu"
+    name: "MPPT kWh 3 Hari Lalu"
     unit_of_measurement: "kWh"
     device_class: energy
     state_class: total
     accuracy_decimals: 3
     update_interval: 60s
     lambda: return id(kwh_3hari);
-
   - platform: template
     id: sensor_kwh_4hari
-    name: "PLTS kWh 4 Hari Lalu"
+    name: "MPPT kWh 4 Hari Lalu"
     unit_of_measurement: "kWh"
     device_class: energy
     state_class: total
@@ -1165,27 +827,254 @@ sensor:
     name: "WiFi Signal"
     update_interval: 60s
 
-  # --- HUAWEI BATTERY SENSORS ---
-  - platform: template
+  # --- HUAWEI MODBUS CONTROLLER SENSORS (Native Non-Blocking) ---
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Busbar Voltage"
+    id: hw_battery_busbar_voltage
+    address: 0x0000
+    register_type: holding
+    value_type: U_WORD
+    filters: [multiply: 0.01]
+    device_class: voltage
+    state_class: measurement
+    unit_of_measurement: V
+    accuracy_decimals: 2
+    icon: mdi:flash-outline
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
     name: "Huawei Battery Voltage"
     id: hw_battery_voltage
+    address: 0x0001
+    register_type: holding
+    value_type: U_WORD
+    filters: [multiply: 0.01]
     device_class: voltage
     state_class: measurement
     unit_of_measurement: V
     accuracy_decimals: 2
     icon: mdi:flash
-    update_interval: never
 
-  - platform: template
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
     name: "Huawei Battery Current"
     id: hw_battery_current
+    address: 0x0002
+    register_type: holding
+    value_type: S_WORD
+    filters: [multiply: 0.01]
     device_class: current
     state_class: measurement
     unit_of_measurement: A
     accuracy_decimals: 2
     icon: mdi:current-dc
-    update_interval: never
 
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery SOC"
+    id: hw_battery_soc
+    address: 0x0003
+    register_type: holding
+    value_type: U_WORD
+    device_class: battery
+    state_class: measurement
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: mdi:battery
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery SOH"
+    id: hw_battery_soh
+    address: 0x0004
+    register_type: holding
+    value_type: U_WORD
+    state_class: measurement
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: mdi:battery-heart
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Max Cell Temperature"
+    id: hw_battery_max_cell_temperature
+    address: 0x0005
+    register_type: holding
+    value_type: S_WORD
+    device_class: temperature
+    state_class: measurement
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    icon: mdi:thermometer-high
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Min Cell Temperature"
+    id: hw_battery_min_cell_temperature
+    address: 0x0006
+    register_type: holding
+    value_type: S_WORD
+    device_class: temperature
+    state_class: measurement
+    unit_of_measurement: °C
+    accuracy_decimals: 0
+    icon: mdi:thermometer-low
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Discharge Times"
+    id: hw_battery_discharge_times
+    address: 0x0042
+    register_type: holding
+    value_type: U_DWORD
+    state_class: total_increasing
+    accuracy_decimals: 0
+    icon: mdi:counter
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Discharge Ah"
+    id: hw_battery_discharge_ah
+    address: 0x0044
+    register_type: holding
+    value_type: U_DWORD
+    state_class: total_increasing
+    unit_of_measurement: Ah
+    accuracy_decimals: 0
+    icon: mdi:counter
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Capacity"
+    id: hw_battery_capacity
+    address: 0x0107
+    register_type: holding
+    value_type: U_WORD
+    state_class: measurement
+    unit_of_measurement: Ah
+    accuracy_decimals: 0
+    icon: mdi:battery-medium
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Output Power"
+    id: hw_battery_output_power
+    address: 0x0204
+    register_type: holding
+    value_type: U_WORD
+    device_class: power
+    state_class: measurement
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    icon: mdi:transmission-tower
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery External Busbar Voltage"
+    id: hw_battery_external_busbar_voltage
+    address: 0x0205
+    register_type: holding
+    value_type: U_WORD
+    filters: [multiply: 0.01]
+    device_class: voltage
+    state_class: measurement
+    unit_of_measurement: V
+    accuracy_decimals: 2
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Runtime"
+    id: hw_battery_runtime
+    address: 0x0209
+    register_type: holding
+    value_type: U_DWORD
+    unit_of_measurement: h
+    accuracy_decimals: 0
+    icon: mdi:clock-outline
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    name: "Huawei Battery Discharge Wh"
+    id: hw_battery_discharge_wh
+    address: 0x0342
+    register_type: holding
+    value_type: U_DWORD
+    state_class: total_increasing
+    unit_of_measurement: Wh
+    accuracy_decimals: 0
+    icon: mdi:lightning-bolt
+
+  # --- CUSTOM SENSOR READERS (Untuk Data Kompleks) ---
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    id: hw_battery_module_mode_raw
+    internal: true
+    address: 0x000E
+    register_type: holding
+    value_type: U_WORD
+    on_value:
+      - then:
+          - lambda: |-
+              std::string mode_text;
+              switch ((int)x) {
+                case 0: mode_text = "Hibernating"; break;
+                case 1: mode_text = "Low Power"; break;
+                case 2: mode_text = "Charging"; break;
+                case 3: mode_text = "Discharging"; break;
+                case 4: mode_text = "Standby"; break;
+                default: mode_text = "Unknown"; break;
+              }
+              id(battery_module_mode).publish_state(mode_text);
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    id: hw_battery_cell_reader
+    internal: true
+    address: 0x0022
+    register_type: holding
+    register_count: 16
+    lambda: |-
+      float min_voltage = 999.0f;
+      float max_voltage = -999.0f;
+      for (int i = 0; i < 16; i++) {
+        uint16_t raw = (data[i*2] << 8) | data[i*2+1];
+        if (raw != 0xFFFF) {
+          float v = raw * 0.001f;
+          if (v > 0.0f) {
+            if (v < min_voltage) min_voltage = v;
+            if (v > max_voltage) max_voltage = v;
+          }
+        }
+      }
+      if (max_voltage >= min_voltage) {
+        id(hw_battery_min_cell_voltage).publish_state(min_voltage);
+        id(hw_battery_max_cell_voltage).publish_state(max_voltage);
+        id(hw_battery_cell_voltage_difference).publish_state((max_voltage - min_voltage) * 1000.0f);
+      }
+      return 0;
+
+  - platform: modbus_controller
+    modbus_controller_id: huawei_controller
+    id: hw_battery_model_reader
+    internal: true
+    address: 0x0332
+    register_type: holding
+    register_count: 6
+    lambda: |-
+      std::string result;
+      for (int i = 0; i < 6; i++) {
+        uint16_t raw = (data[i*2] << 8) | data[i*2+1];
+        if (raw == 0xFFFF) break;
+        uint8_t high = (raw >> 8) & 0xFF;
+        uint8_t low = raw & 0xFF;
+        if (high >= 0x20 && high <= 0x7E) result += (char)high;
+        if (low >= 0x20 && low <= 0x7E) result += (char)low;
+      }
+      id(battery_model).publish_state(result);
+      return 0;
+
+  # --- HUAWEI TEMPLATE SENSORS ---
   - platform: template
     name: "Huawei Battery Power"
     id: hw_battery_power
@@ -1194,36 +1083,12 @@ sensor:
     unit_of_measurement: W
     accuracy_decimals: 1
     icon: mdi:lightning-bolt
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery SOC"
-    id: hw_battery_soc
-    device_class: battery
-    state_class: measurement
-    unit_of_measurement: "%"
-    accuracy_decimals: 0
-    icon: mdi:battery
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery SOH"
-    id: hw_battery_soh
-    state_class: measurement
-    unit_of_measurement: "%"
-    accuracy_decimals: 0
-    icon: mdi:battery-heart
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery Busbar Voltage"
-    id: hw_battery_busbar_voltage
-    device_class: voltage
-    state_class: measurement
-    unit_of_measurement: V
-    accuracy_decimals: 2
-    icon: mdi:flash-outline
-    update_interval: never
+    update_interval: 5s
+    lambda: |-
+      float v = id(hw_battery_voltage).state;
+      float i = id(hw_battery_current).state;
+      if (std::isnan(v) || std::isnan(i)) return NAN;
+      return v * i;
 
   - platform: template
     name: "Huawei Battery Min Cell Voltage"
@@ -1233,7 +1098,6 @@ sensor:
     unit_of_measurement: V
     accuracy_decimals: 3
     icon: mdi:battery-minus
-    update_interval: never
 
   - platform: template
     name: "Huawei Battery Max Cell Voltage"
@@ -1243,7 +1107,6 @@ sensor:
     unit_of_measurement: V
     accuracy_decimals: 3
     icon: mdi:battery-plus
-    update_interval: never
 
   - platform: template
     name: "Huawei Battery Cell Voltage Difference"
@@ -1252,61 +1115,6 @@ sensor:
     unit_of_measurement: mV
     accuracy_decimals: 1
     icon: mdi:delta
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery Max Cell Temperature"
-    id: hw_battery_max_cell_temperature
-    device_class: temperature
-    state_class: measurement
-    unit_of_measurement: °C
-    accuracy_decimals: 0
-    icon: mdi:thermometer-high
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery Min Cell Temperature"
-    id: hw_battery_min_cell_temperature
-    device_class: temperature
-    state_class: measurement
-    unit_of_measurement: °C
-    accuracy_decimals: 0
-    icon: mdi:thermometer-low
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery Discharge Ah"
-    id: hw_battery_discharge_ah
-    state_class: total_increasing
-    unit_of_measurement: Ah
-    accuracy_decimals: 0
-    icon: mdi:counter
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery Discharge Wh"
-    id: hw_battery_discharge_wh
-    state_class: total_increasing
-    unit_of_measurement: Wh
-    accuracy_decimals: 0
-    icon: mdi:lightning-bolt
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery Discharge Times"
-    id: hw_battery_discharge_times
-    state_class: total_increasing
-    accuracy_decimals: 0
-    icon: mdi:counter
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery Runtime"
-    id: hw_battery_runtime
-    unit_of_measurement: h
-    accuracy_decimals: 0
-    icon: mdi:clock-outline
-    update_interval: never
 
   - platform: template
     name: "Huawei Battery Accumulated Cycles"
@@ -1314,39 +1122,15 @@ sensor:
     state_class: measurement
     accuracy_decimals: 0
     icon: mdi:sync
-    update_interval: never
+    update_interval: 10s
+    lambda: |-
+      float cap = id(hw_battery_capacity).state;
+      if (std::isnan(cap) || cap <= 0.0f) cap = 100.0f;
+      float ah = id(hw_battery_discharge_ah).state;
+      if (std::isnan(ah)) return NAN;
+      return round(ah / (cap * 0.74f));
 
-  - platform: template
-    name: "Huawei Battery Capacity"
-    id: hw_battery_capacity
-    state_class: measurement
-    unit_of_measurement: Ah
-    accuracy_decimals: 0
-    icon: mdi:battery-medium
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery Output Power"
-    id: hw_battery_output_power
-    device_class: power
-    state_class: measurement
-    unit_of_measurement: W
-    accuracy_decimals: 0
-    icon: mdi:transmission-tower
-    update_interval: never
-
-  - platform: template
-    name: "Huawei Battery External Busbar Voltage"
-    id: hw_battery_external_busbar_voltage
-    device_class: voltage
-    state_class: measurement
-    unit_of_measurement: V
-    accuracy_decimals: 2
-    update_interval: never
-
-# ============================================================
-#  LCD 16x2 I2C
-# ============================================================
+# ── DISPLAY ───────────────────────────────────────────────────────────────────
 display:
   - platform: lcd_pcf8574
     id: lcd_display
@@ -1359,52 +1143,71 @@ display:
         return; 
       }
       it.backlight();
-
       int page = id(menu_page);
       char buf[17];
 
+      auto get_val = [](float val) -> float { return std::isnan(val) ? 0.0f : val; };
+
+      // Pembacaan Nilai Sensor (Menggunakan Sensor ID, Global dihapus)
+      float v_bat_mppt = get_val(id(sensor_battery_voltage).state);
+      float i_chg_mppt = get_val(id(sensor_charge_current).state);
+      float p_pv_mppt  = get_val(id(sensor_pv_power).state);
+      float kwh_daily  = get_val(id(sensor_daily_kwh).state);
+      float w_max      = get_val(id(watt_max));
+      float s_hour     = get_val(id(sun_hour));
+      float v_ac       = get_val(id(pzem_voltage).state);
+      float i_ac       = get_val(id(pzem_current).state);
+      float p_ac       = get_val(id(pzem_power).state);
+      float freq       = get_val(id(pzem_frequency).state);
+      float pf         = get_val(id(pzem_pf).state);
+
+      float kwh_1 = get_val(id(kwh_kemarin));
+      float kwh_2 = get_val(id(kwh_2hari));
+      float kwh_3 = get_val(id(kwh_3hari));
+      float kwh_4 = get_val(id(kwh_4hari));
+
       switch (page) {
-        case 0: // Halaman Sensor Utama MPPT
-          it.printf(0, 0, "%.2fV  ", id(g_battery_voltage));
-          it.printf(8, 0, "%.2fA  ", id(g_charge_current));
-          it.printf(0, 1, "%.1fW  ", id(g_pv_power));
-          it.printf(8, 1, "%.3fkWh", id(g_daily_kwh));
+        case 0:
+          it.printf(0, 0, "%.2fV  ", v_bat_mppt);
+          it.printf(8, 0, "%.2fA  ", i_chg_mppt);
+          it.printf(0, 1, "%.1fW  ", p_pv_mppt);
+          it.printf(8, 1, "%.3fkWh", kwh_daily);
           break;
 
-        case 1: // Halaman Wp Max & PSH
+        case 1:
           it.print(0, 0, "Wp Max: ");
           it.print(8, 0, " Psh:");
-          it.printf(0, 1, "%.2fW ", id(watt_max));
-          it.printf(9, 1, "%.2fJ ", id(sun_hour));
+          it.printf(0, 1, "%.2fW ", w_max);
+          it.printf(9, 1, "%.2fJ ", s_hour);
           break;
 
-        case 2: // Halaman Histori
-          snprintf(buf, sizeof(buf), "D1:%.2f D2:%.2f", id(kwh_kemarin), id(kwh_2hari));
+        case 2:
+          snprintf(buf, sizeof(buf), "D1:%.2f D2:%.2f", kwh_1, kwh_2);
           it.print(0, 0, buf);
-          snprintf(buf, sizeof(buf), "D3:%.2f D4:%.2f", id(kwh_3hari), id(kwh_4hari));
+          snprintf(buf, sizeof(buf), "D3:%.2f D4:%.2f", kwh_3, kwh_4);
           it.print(0, 1, buf);
           break;
 
-        case 3: // Halaman PZEM-004T Utama (V AC, I AC, Power AC, PF)
-          it.printf(0, 0, "%.1fV ", id(pzem_voltage).state);
-          it.printf(8, 0, "%.2fA ", id(pzem_current).state);
-          it.printf(0, 1, "%.1fW ", id(pzem_power).state);
-          it.printf(8, 1, "%.3fkWh: ", id(pzem_energy).state / 1000.0f);
+        case 3:
+          it.printf(0, 0, "%.1fV ", v_ac);
+          it.printf(8, 0, "%.2fA ", i_ac);
+          it.printf(0, 1, "%.1fW ", p_ac);
+          it.printf(8, 1, "%.3fkWh", get_val(id(sensor_ac_daily_kwh).state));
           break;
 
-        case 4: // Halaman PZEM-004T Tambahan (Freq & AC Energy)
+        case 4:
           it.print(0, 0, "Freq: ");
           it.print(8, 0, " PF: ");
-          it.printf(0, 1, "%.2fHz ", id(pzem_frequency));
-          it.printf(9, 1, "%.2f ", id(pzem_pf));
+          it.printf(0, 1, "%.0fHz ", freq);
+          it.printf(9, 1, "%.2f ", pf);
           break;
 
-        case 5: // Halaman Relay/Tracker
+        case 5:
           it.printf(0, 0, "Relay:%s", id(motor_aktif) ? "Aktif  " : "Mati   ");
           it.printf(0, 1, "Tracker:%-7s", id(tracker_status_text).state.c_str());
           break;
 
-        case 6: // Halaman Jam
+        case 6:
           {
             it.print(1, 0, "Waktu Sekarang");
             auto t = id(sntp_time).now();
