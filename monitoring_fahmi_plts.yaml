@@ -5,15 +5,12 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
-  on_boot:
-    priority: -100.0
-    then:
-      - delay: 15s
-      - script.execute: sync_time_to_mppt
 
 # ── ESP32 CONFIGURATION ─────────────────────────────────────────────────────
 esp32:
   board: esp32doit-devkit-v1
+  framework:
+    type: arduino
 
 logger:
   hardware_uart: UART0
@@ -48,17 +45,17 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  ap:
-    ssid: "Monitoring-Fahmi-PLTS"
-    password: !secret fallback_ap_password
+  reboot_timeout: 10min
+  fast_connect: true
+  power_save_mode: none
 
-captive_portal:
+safe_mode:
 
 # ── UART CONFIGURATION ────────────────────────────────────────────────────────
 uart:
   - id: mppt_uart
-    tx_pin: GPIO27
-    rx_pin: GPIO26
+    tx_pin: GPIO25
+    rx_pin: GPIO35
     baud_rate: 2400
     data_bits: 8
     parity: NONE
@@ -130,7 +127,7 @@ time:
 
       - seconds: 0
         minutes: 0
-        hours: 18
+        hours: 20
         then:
           - globals.set:
               id: lcd_aktif
@@ -152,7 +149,7 @@ time:
               condition:
                 lambda: "return !id(sudah_balik);"
               then:
-                - script.execute: script_balik_timur_5min
+                - script.execute: script_balik_timur_2min
 
       - seconds: 0
         minutes: 0
@@ -163,18 +160,12 @@ time:
               value: "false"
           - logger.log: "Flag tracker di-reset"
 
-      - seconds: 0
-        minutes: 0
-        hours: 3
-        then:
-          - logger.log: "Melakukan Restart Terjadwal (03:00)"
-          - button.press: btn_restart_esp
-
 i2c:
   sda: GPIO23
   scl: GPIO22
-  scan: true
+  scan: false
   id: bus_i2c
+  frequency: 100kHz
 
 # ── SCRIPT ───────────────────────────────────────────────────────────────────
 script:
@@ -182,22 +173,24 @@ script:
     mode: restart
     then:
       - light.turn_on: led_status
-      - delay: 200ms
+      - delay: 100ms
       - light.turn_off: led_status
-      - delay: 800ms
+      - delay: 900ms
 
   - id: animation_fast_blink
     mode: restart
     then:
       - light.turn_on: led_status
-      - delay: 200ms
+      - delay: 100ms
       - light.turn_off: led_status
+      - delay: 400ms
 
   - id: sync_time_to_mppt
     then:
       - lambda: |-
           auto now = id(sntp_time).now();
-          if (!now.is_valid() || now.year < 2022) {
+          id(mppt_sync_valid) = (now.is_valid() && now.year >= 2022);
+          if (!id(mppt_sync_valid)) {
             ESP_LOGW("MPPT_SYNC", "NTP belum sinkron, sync dibatalkan!");
             return;
           }
@@ -220,25 +213,27 @@ script:
           uint8_t flush_byte;
           while (id(mppt_uart).available()) id(mppt_uart).read_byte(&flush_byte);
 
-          id(de_re_pin).turn_on();
-          delay(1);
+          // Tulis langsung ke buffer TX, modul auto-direction yang akan mengatur arahnya
           id(mppt_uart).write_array(sync_cmd, sizeof(sync_cmd));
-          id(mppt_uart).flush();
-          id(de_re_pin).turn_off();
+      - if:
+          condition:
+            lambda: "return id(mppt_sync_valid);"
+          then:
+            - delay: 90ms
+            - lambda: |-
+                ESP_LOGI("MPPT_SYNC", "Waktu berhasil dikirim ke MPPT");
 
-          ESP_LOGI("MPPT_SYNC", "Waktu berhasil dikirim ke MPPT");
-
-  - id: script_balik_timur_5min
+  - id: script_balik_timur_2min
     mode: restart
     then:
-      - logger.log: "Balik ke Timur - 5min"
+      - logger.log: "Balik ke Timur - 2min"
       - switch.turn_off: relay_maju
       - switch.turn_on: relay_mundur
-      - delay: 5min
+      - delay: 2min
       - switch.turn_off: relay_mundur
       - globals.set: { id: sudah_balik, value: "true" }
 
-  - id: script_tracker_maju_5menit
+  - id: script_tracker_maju_2min
     mode: restart
     then:
       - if:
@@ -248,14 +243,14 @@ script:
             - globals.set: { id: mode_auto, value: "true" }
             - switch.turn_off: relay_mundur
             - switch.turn_on: relay_maju
-            - delay: 5min
+            - delay: 2min
             - switch.turn_off: relay_maju
             - globals.set: { id: mode_auto, value: "false" }
-            - switch.turn_off: sw_tracker_maju_5menit
+            - switch.turn_off: sw_tracker_maju_2min
           else:
-            - switch.turn_off: sw_tracker_maju_5menit
+            - switch.turn_off: sw_tracker_maju_2min
 
-  - id: script_tracker_mundur_5menit
+  - id: script_tracker_mundur_2min
     mode: restart
     then:
       - if:
@@ -265,12 +260,12 @@ script:
             - globals.set: { id: mode_auto, value: "true" }
             - switch.turn_off: relay_maju
             - switch.turn_on: relay_mundur
-            - delay: 5min
+            - delay: 2min
             - switch.turn_off: relay_mundur
             - globals.set: { id: mode_auto, value: "false" }
-            - switch.turn_off: sw_tracker_mundur_5menit
+            - switch.turn_off: sw_tracker_mundur_2min
           else:
-            - switch.turn_off: sw_tracker_mundur_5menit
+            - switch.turn_off: sw_tracker_mundur_2min
 
   - id: script_tracker_mendatar
     mode: restart
@@ -283,10 +278,10 @@ script:
             - globals.set: { id: sequence_mundur, value: "true" }
             - switch.turn_off: relay_mundur
             - switch.turn_on: relay_maju
-            - delay: 5min
+            - delay: 2min
             - switch.turn_off: relay_maju
             - switch.turn_on: relay_mundur
-            - delay: 150s
+            - delay: 30sec
             - switch.turn_off: relay_mundur
             - globals.set: { id: mode_auto, value: "false" }
             - globals.set: { id: sequence_mundur, value: "false" }
@@ -297,12 +292,11 @@ script:
   - id: script_read_mppt_rx
     mode: restart
     then:
-      - delay: 300ms # Jeda aman (non-blocking) membiarkan data terisi di UART HW Buffer
+      - delay: 500ms
       - lambda: |-
           uint8_t buf[128];
           int buf_len = 0;
 
-          // BACA SECARA INSTAN TANPA LOOP MILLIS (Ini yang membuat hang sebelumnya)
           while (id(mppt_uart).available()) {
             uint8_t rx_byte;
             id(mppt_uart).read_byte(&rx_byte);
@@ -311,7 +305,7 @@ script:
             }
           }
 
-          if (buf_len < 60) return; // Mengabaikan jika data terlalu pendek
+          if (buf_len < 60) return;
 
           const uint8_t HDR[] = {0x4D, 0x56, 0x4D, 0x50, 0x39};
           int h = -1;
@@ -327,12 +321,10 @@ script:
           if (h == -1 || (buf_len - h) < 60) return;
           auto B = [&](int pos) -> uint8_t { return buf[h + pos - 1]; };
 
-          // --- MEMBACA DAN MEMVALIDASI DATA ---
           float pv_v = (float) B(16);
           int bat_cap = (int) B(18);
           float bat_v = (float)(((uint16_t)B(21) << 8) | B(20)) / 10.0f;
           float chg_i = B(24) + (B(60) / 10.0f);
-          int mcu_t = (int) B(25);
           int hs_t = (int) B(26);
 
           uint16_t day_int  = ((uint16_t)B(29) << 8) | B(28);
@@ -343,24 +335,32 @@ script:
           uint16_t tot_frac = B(33);
           float total_k = tot_int + (tot_frac / 10.0f);
 
-          if (bat_v > 100.0f || pv_v > 200.0f || bat_cap > 100 || mcu_t > 120 || hs_t > 120) {
-            ESP_LOGW("MPPT_READ", "Data corrupt terdeteksi dan diabaikan!");
+          // Validasi rentang wajar agar data sampah tidak lolos
+          if (bat_v < 10.0f || bat_v > 100.0f || pv_v > 200.0f || bat_cap > 100 || hs_t > 120) {
+            ESP_LOGW("MPPT_READ", "Data corrupt/tidak wajar terdeteksi dan diabaikan!");
             return;
           }
 
-          // Publish Langsung ke Sensor (Variabel Global MPPT dihapus untuk hemat memori)
           id(sensor_pv_voltage).publish_state(pv_v);
           id(sensor_battery_capacity).publish_state((float)bat_cap);
           id(sensor_battery_voltage).publish_state(bat_v);
           id(sensor_charge_current).publish_state(chg_i);
           id(sensor_pv_power).publish_state(bat_v * chg_i);
-          id(sensor_mcu_temp).publish_state((float)mcu_t);
           id(sensor_heatsink_temp).publish_state((float)hs_t);
           id(sensor_daily_kwh).publish_state(daily_k);
           id(sensor_total_kwh).publish_state(total_k);
 
 # ── GLOBAL VARIABLES ──────────────────────────────────────────────────────────
 globals:
+  - id: led_phase
+    type: int
+    restore_value: false
+    initial_value: "0"
+  # Flag internal untuk sync_time_to_mppt (hindari flush() blocking dgn if: bertingkat)
+  - id: mppt_sync_valid
+    type: bool
+    restore_value: false
+    initial_value: "false"
   # Tersisa hanya yang benar-benar dibutuhkan oleh sistem rotasi & trigger harian
   - id: kwh_kemarin
     type: float
@@ -438,17 +438,12 @@ text_sensor:
 # ── SWITCH ────────────────────────────────────────────────────────────────────
 switch:
   - platform: gpio
-    pin: GPIO25
-    id: de_re_pin
-    internal: true
-
-  - platform: gpio
     id: relay_maju
     name: "Relay Maju"
     internal: true
     icon: mdi:arrow-right-bold
     pin:
-      number: GPIO19
+      number: GPIO18
       mode: OUTPUT
     restore_mode: ALWAYS_OFF
     interlock: [relay_mundur]
@@ -468,7 +463,7 @@ switch:
     internal: true
     icon: mdi:arrow-left-bold
     pin:
-      number: GPIO18
+      number: GPIO19
       mode: OUTPUT
     restore_mode: ALWAYS_OFF
     interlock: [relay_maju]
@@ -503,26 +498,26 @@ switch:
       - switch.turn_off: relay_mundur
 
   - platform: template
-    name: "Tracker Maju 5 Menit"
-    id: sw_tracker_maju_5menit
+    name: "Tracker Maju 2 Menit"
+    id: sw_tracker_maju_2min
     icon: mdi:arrow-right-bold-box
     optimistic: true
     turn_on_action:
-      - script.execute: script_tracker_maju_5menit
+      - script.execute: script_tracker_maju_2min
     turn_off_action:
-      - script.stop: script_tracker_maju_5menit
+      - script.stop: script_tracker_maju_2min
       - switch.turn_off: relay_maju
       - globals.set: { id: mode_auto, value: "false" }
 
   - platform: template
-    name: "Tracker Mundur 5 Menit"
-    id: sw_tracker_mundur_5menit
+    name: "Tracker Mundur 2 Menit"
+    id: sw_tracker_mundur_2min
     icon: mdi:arrow-left-bold-box
     optimistic: true
     turn_on_action:
-      - script.execute: script_tracker_mundur_5menit
+      - script.execute: script_tracker_mundur_2min
     turn_off_action:
-      - script.stop: script_tracker_mundur_5menit
+      - script.stop: script_tracker_mundur_2min
       - switch.turn_off: relay_mundur
       - globals.set: { id: mode_auto, value: "false" }
 
@@ -561,22 +556,15 @@ button:
 
 # ── INTERVAL ──────────────────────────────────────────────────────────────────
 interval:
-  - interval: 1000ms
+  - interval: 100ms
     then:
-      - if:
-          condition:
-            wifi.connected:
-          then:
-            - script.execute: animation_strobe_wifi
-
-  - interval: 200ms
-    then:
-      - if:
-          condition:
-            not:
-              wifi.connected:
-          then:
-            - script.execute: animation_fast_blink
+      - lambda: |-
+          id(led_phase)++;
+          bool wifi_ok = WiFi.status() == WL_CONNECTED;
+          int period = wifi_ok ? 10 : 5;   // 1s vs 500ms
+          int phase = id(led_phase) % period;
+          if (phase == 0) id(led_status).turn_on().perform();
+          else if (phase == 1) id(led_status).turn_off().perform();
 
   - interval: 330s
     then:
@@ -602,11 +590,9 @@ interval:
           while (id(mppt_uart).available()) id(mppt_uart).read_byte(&flush_byte);
 
           const uint8_t cmd[] = {0x43, 0x4D, 0x48, 0x42, 0x06, 0x4D, 0x50, 0x50, 0x54, 0x48, 0x42};
-          id(de_re_pin).turn_on();
-          delay(1);
+          // Tulis langsung ke buffer TX
           id(mppt_uart).write_array(cmd, sizeof(cmd));
-          id(mppt_uart).flush();
-          id(de_re_pin).turn_off();
+      - delay: 50ms
       - script.execute: script_read_mppt_rx
 
   - interval: 5s
@@ -693,6 +679,8 @@ sensor:
     device_class: voltage
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - skip_initial: 2
 
   - platform: template
     name: "MPPT Battery Capacity"
@@ -710,6 +698,8 @@ sensor:
     device_class: voltage
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - skip_initial: 2
 
   - platform: template
     name: "MPPT Charge Current"
@@ -718,6 +708,8 @@ sensor:
     device_class: current
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - skip_initial: 2
 
   - platform: template
     name: "MPPT PV Power"
@@ -726,19 +718,13 @@ sensor:
     device_class: power
     state_class: measurement
     accuracy_decimals: 1
+    filters:
+      - skip_initial: 2
     lambda: |
       if (id(sensor_pv_power).state > id(watt_max)) {
         id(watt_max) = id(sensor_pv_power).state;
       }
       return id(sensor_pv_power).state;
-
-  - platform: template
-    name: "MPPT MCU Temperature"
-    id: sensor_mcu_temp
-    unit_of_measurement: "°C"
-    device_class: temperature
-    state_class: measurement
-    accuracy_decimals: 0
 
   - platform: template
     name: "MPPT Heatsink Temperature"
@@ -772,6 +758,8 @@ sensor:
     state_class: measurement
     accuracy_decimals: 2
     update_interval: 10s
+    filters:
+      - skip_initial: 2
     lambda: |-
       id(sun_hour) = id(sensor_daily_kwh).state / 0.5;
       return id(sun_hour);
@@ -784,6 +772,8 @@ sensor:
     state_class: measurement
     accuracy_decimals: 0
     update_interval: 10s
+    filters:
+      - skip_initial: 2
     lambda: return id(watt_max);
 
   - platform: template
@@ -828,20 +818,6 @@ sensor:
     update_interval: 60s
 
   # --- HUAWEI MODBUS CONTROLLER SENSORS (Native Non-Blocking) ---
-  - platform: modbus_controller
-    modbus_controller_id: huawei_controller
-    name: "Huawei Battery Busbar Voltage"
-    id: hw_battery_busbar_voltage
-    address: 0x0000
-    register_type: holding
-    value_type: U_WORD
-    filters: [multiply: 0.01]
-    device_class: voltage
-    state_class: measurement
-    unit_of_measurement: V
-    accuracy_decimals: 2
-    icon: mdi:flash-outline
-
   - platform: modbus_controller
     modbus_controller_id: huawei_controller
     name: "Huawei Battery Voltage"
@@ -981,17 +957,6 @@ sensor:
     state_class: measurement
     unit_of_measurement: V
     accuracy_decimals: 2
-
-  - platform: modbus_controller
-    modbus_controller_id: huawei_controller
-    name: "Huawei Battery Runtime"
-    id: hw_battery_runtime
-    address: 0x0209
-    register_type: holding
-    value_type: U_DWORD
-    unit_of_measurement: h
-    accuracy_decimals: 0
-    icon: mdi:clock-outline
 
   - platform: modbus_controller
     modbus_controller_id: huawei_controller
@@ -1135,8 +1100,8 @@ display:
   - platform: lcd_pcf8574
     id: lcd_display
     dimensions: 16x2
-    address: 0x27
-    update_interval: 1s
+    address: 0x3F
+    update_interval: 2s
     lambda: |-
       if (!id(lcd_aktif)) { 
         it.no_backlight(); 
