@@ -1,0 +1,742 @@
+type: sections
+sections:
+  - type: grid
+    cards:
+      - type: heading
+        icon: mdi:solar-panel
+        heading: PLTS 500WP
+        heading_style: title
+      - type: custom:power-flow-card-plus
+        entities:
+          battery:
+            state_of_charge_unit_white_space: true
+            show_state_of_charge: true
+            color:
+              consumption:
+                - 0
+                - 145
+                - 255
+              production:
+                - 255
+                - 152
+                - 0
+            invert_state: false
+            color_value: true
+            use_metadata: false
+            display_state: one_way
+            state_of_charge: sensor.monitoring_fahmi_plts_huawei_battery_soc
+            entity:
+              consumption: sensor.monitoring_fahmi_plts_ac_power
+              production: sensor.monitoring_fahmi_plts_mppt_pv_power
+          solar:
+            name: Panel Surya
+            icon: mdi:solar-power-variant
+            secondary_info:
+              unit_of_measurement: V
+              entity: sensor.monitoring_fahmi_plts_mppt_pv_voltage
+            display_zero: true
+            display_zero_state: false
+            invert_state: false
+            color_icon: false
+            color_value: true
+            entity: sensor.monitoring_fahmi_plts_mppt_pv_power
+          home:
+            secondary_info:
+              unit_of_measurement: V
+              entity: sensor.monitoring_fahmi_plts_ac_voltage
+            subtract_individual: false
+            override_state: false
+            use_metadata: false
+            hide: false
+            name: Rumah
+        clickable_entities: true
+        display_zero_lines:
+          mode: hide
+          transparency: 50
+          grey_color:
+            - 189
+            - 189
+            - 189
+        use_new_flow_rate_model: true
+        min_flow_rate: 0.75
+        max_expected_power: 500
+        min_expected_power: 0.01
+        transparency_zero_lines: 0
+        sort_individual_devices: false
+        disable_dots: false
+        no_labels: false
+        allow_layout_break: false
+        grid_options:
+          rows: auto
+          columns: 12
+        max_flow_rate: 5
+        kilo_threshold: 999
+        base_decimals: 1
+        kilo_decimals: 1
+      - type: heading
+        heading_style: title
+        heading: Produksi Listrik PLTS
+        icon: mdi:solar-panel
+      - square: false
+        type: grid
+        cards:
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_mppt_battery_voltage
+            name: Voltase
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_mppt_charge_current
+            name: Arus
+            icon_color: green
+            icon: mdi:current-dc
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            name: Daya
+            entity: sensor.monitoring_fahmi_plts_mppt_pv_power
+            icon_color: accent
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_mppt_daily_energy
+            name: Produksi Hari Ini
+            icon: mdi:solar-power
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+        columns: 2
+      - square: false
+        type: grid
+        cards:
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_mppt_peak_sun_hour
+            name: Sun Hour
+            icon_type: none
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    align-items: center !important;
+                    text-align: center !important;
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            name: Watt Maximum
+            icon_type: none
+            entity: sensor.monitoring_fahmi_plts_mppt_daya_maksimum
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    align-items: center !important;
+                    text-align: center !important;
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            name: Total Energy
+            icon_type: none
+            entity: sensor.monitoring_fahmi_plts_mppt_total_energy
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    align-items: center !important;
+                    text-align: center !important;
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+        columns: 3
+      - type: heading
+        heading_style: title
+        icon: mdi:home-lightning-bolt
+        heading: Beban Listrik Rumah
+      - square: false
+        type: grid
+        cards:
+          - type: custom:mushroom-entity-card
+            name: Voltase
+            icon: mdi:sine-wave
+            entity: sensor.monitoring_fahmi_plts_ac_voltage
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_ac_current
+            name: Arus
+            icon_color: green
+            icon: mdi:current-ac
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            name: Daya
+            entity: sensor.monitoring_fahmi_plts_ac_power
+            icon_color: accent
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_ac_daily_energy_consumption
+            name: Konsumsi Hari Ini
+            icon: mdi:power-plug
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+        columns: 2
+      - square: false
+        type: grid
+        cards:
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_ac_frequency
+            name: Frequency
+            icon_type: none
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    align-items: center !important;
+                    text-align: center !important;
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_ac_power_factor
+            name: Power Factor
+            icon_type: none
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    align-items: center !important;
+                    text-align: center !important;
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+          - type: custom:mushroom-entity-card
+            entity: sensor.monitoring_fahmi_plts_ac_energy
+            name: Total Energy
+            icon_type: none
+            card_mod:
+              style:
+                mushroom-state-info$: |
+                  .container {
+                    align-items: center !important;
+                    text-align: center !important;
+                    --card-primary-font-size: 10px !important;    /* Ukuran Teks Nama */
+                    --card-primary-font-weight: 300 !important;   /* Ketebalan Nama (Bisa diatur: 400=normal, 600=semi-bold, 700=bold) */
+                    --card-secondary-font-size: 16px !important;  /* Ukuran Teks Value */
+                  }
+        columns: 3
+    column_span: 1
+  - square: false
+    type: grid
+    columns: 1
+    cards:
+      - type: heading
+        icon: mdi:chart-areaspline-variant
+        heading: Grafik PLTS
+        heading_style: title
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: Grafik MPPT
+          show_states: true
+          colorize_states: true
+        graph_span: 24h
+        span:
+          start: day
+        apex_config:
+          chart:
+            height: 140
+          legend:
+            show: false
+          grid:
+            padding:
+              top: -10
+              bottom: 0
+          fill:
+            type: gradient
+            gradient:
+              shadeIntensity: 1
+              opacityFrom: 0.65
+              opacityTo: 0.05
+              stops:
+                - 0
+                - 100
+        all_series_config:
+          stroke_width: 1.5
+          type: area
+          group_by:
+            func: avg
+            duration: 5m
+        series:
+          - entity: >-
+              sensor.monitoring_fahmi_plts_huawei_battery_external_busbar_voltage
+            name: Voltase DC
+            color: '#00aeff'
+            unit: V
+            yaxis_id: volt
+          - entity: sensor.monitoring_fahmi_plts_mppt_pv_power
+            name: Daya DC
+            color: '#00b894'
+            unit: W
+            yaxis_id: daya
+        yaxis:
+          - id: volt
+            decimals: 1
+            apex_config:
+              tickAmount: 3
+          - id: daya
+            opposite: true
+            decimals: 0
+            apex_config:
+              tickAmount: 3
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: Grafik Konsumsi Listrik Rumah (AC)
+          show_states: true
+          colorize_states: true
+        graph_span: 24h
+        span:
+          start: day
+        apex_config:
+          chart:
+            height: 140
+          legend:
+            show: false
+          grid:
+            padding:
+              top: -10
+              bottom: 0
+          fill:
+            type: gradient
+            gradient:
+              shadeIntensity: 1
+              opacityFrom: 0.65
+              opacityTo: 0.05
+              stops:
+                - 0
+                - 100
+        all_series_config:
+          stroke_width: 1.5
+          type: area
+          group_by:
+            func: avg
+            duration: 5m
+        series:
+          - entity: sensor.monitoring_fahmi_plts_ac_voltage
+            name: Voltase AC
+            color: '#00aeff'
+            unit: V
+            yaxis_id: volt
+          - entity: sensor.monitoring_fahmi_plts_ac_power
+            name: Daya AC
+            color: '#00b894'
+            unit: W
+            yaxis_id: daya
+        yaxis:
+          - id: volt
+            decimals: 1
+            apex_config:
+              tickAmount: 3
+          - id: daya
+            opposite: true
+            decimals: 0
+            apex_config:
+              tickAmount: 3
+      - type: custom:apexcharts-card
+        graph_span: 15d
+        span:
+          end: day
+        header:
+          show: true
+          title: Grafik Harian kWh (15 Hari Terakhir)
+          show_states: true
+          colorize_states: true
+        apex_config:
+          chart:
+            type: bar
+            height: 185
+            stacked: true
+          yaxis:
+            min: 0
+            max: |
+              EVAL:function(max) { 
+                return max * 1.01;  
+              }
+          legend:
+            show: false
+            position: bottom
+          dataLabels:
+            enabled: true
+            offsetY: -1
+            style:
+              fontSize: 10px
+              fontWeight: bold
+              colors:
+                - '#000000'
+            background:
+              enabled: true
+              opacity: 0.6
+              borderRadius: 3
+              padding: 1.5
+          plotOptions:
+            bar:
+              columnWidth: 70%
+              borderRadius: 4
+          xaxis:
+            labels:
+              format: dd
+        series:
+          - entity: sensor.monitoring_fahmi_plts_mppt_daily_energy
+            name: Produksi Panel Surya
+            type: column
+            color: '#2196f3'
+            unit: ' kWh'
+            show:
+              datalabels: true
+            group_by:
+              func: max
+              duration: 1d
+              fill: last
+          - entity: sensor.monitoring_fahmi_plts_ac_daily_energy_consumption
+            name: Konsumsi Listrik
+            type: column
+            color: '#ffbb00'
+            unit: ' kWh'
+            show:
+              datalabels: true
+            group_by:
+              func: max
+              duration: 1d
+              fill: last
+  - type: grid
+    cards:
+      - type: heading
+        icon: mdi:battery-charging-wireless-60
+        heading: Monitoring Huawei Battery
+        heading_style: title
+      - type: custom:button-card
+        entity: sensor.monitoring_fahmi_plts_huawei_battery_soc
+        show_name: false
+        show_state: false
+        show_icon: false
+        show_label: false
+        variables:
+          soc: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_soc"].state ]]]
+          voltage: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_voltage"].state
+            ]]]
+          current: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_current"].state
+            ]]]
+          diff_cell: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_cell_voltage_difference"].state
+            ]]]
+          power: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_power"].state
+            ]]]
+          min_cell: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_min_cell_voltage"].state
+            ]]]
+          max_cell: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_max_cell_voltage"].state
+            ]]]
+          cycles: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_accumulated_cycles"].state
+            ]]]
+          online: >-
+            [[[ return states["binary_sensor.esm_48100b1_online"] ?
+            states["binary_sensor.esm_48100b1_online"].state === "on" : true ]]]
+          temp: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_max_cell_temperature"].state
+            ]]]
+          soh: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_soh"].state ]]]
+          status: >-
+            [[[ return
+            states["sensor.monitoring_fahmi_plts_huawei_battery_module_mode"].state 
+            ]]]
+        styles:
+          card:
+            - width: 100%
+            - height: 100%
+            - box-sizing: border-box
+            - padding: 20px
+            - border-radius: 20px
+            - box-shadow: 0 4px 16px rgba(0,0,0,0.15)
+          grid:
+            - grid-template-areas: '"custom_fields"'
+            - grid-template-columns: 12fr
+            - grid-template-rows: 1fr
+            - width: 100%
+            - height: 100%
+          custom_fields:
+            card_content:
+              - justify-self: stretch
+              - align-self: stretch
+              - width: 100%
+              - height: 100%
+        custom_fields:
+          card_content: |
+            [[[
+              const fmt = (val, digits) => {
+                const n = Number(val);
+                return isNaN(n) ? (val ?? '-') : n.toFixed(digits);
+              };
+
+              const soc = Math.round(Number(variables.soc)) || 0;
+              const online = variables.online;
+
+              const voltage  = fmt(variables.voltage, 2);
+              const current  = fmt(variables.current, 2);
+              const diffCell = fmt(variables.diff_cell, 0);
+              const power    = fmt(variables.power, 1);
+              const minCell  = fmt(variables.min_cell, 3);
+              const maxCell  = fmt(variables.max_cell, 3);
+              const cycles   = fmt(variables.cycles, 0);
+              const uptime   = variables.uptime ? variables.uptime : null;
+              const temp     = fmt(variables.temp, 1);
+              const soh      = fmt(variables.soh, 0);
+              const status      = fmt(variables.status, 1);
+
+              return `
+              <style>
+                .esm-card { padding-left:8px; padding-right:8px; font-family: "Inter", "Roboto", sans-serif; width: 100%; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; }
+                .esm-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+                .esm-title { font-size:20px; font-weight:800; color:var(--primary-text-color); }
+                .esm-dot { margin-right:4px; width:12px; height:12px; border-radius:50%; background:${online ? '#1fbf75' : '#d64545'}; box-shadow:0 0 0 4px ${online ? 'rgba(31,191,117,0.15)' : 'rgba(214,69,69,0.15)'}; }
+
+                .esm-soc-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+                .esm-soc-label { color:var(--secondary-text-color); font-size:18px; font-weight:500; letter-spacing:.5px; text-transform:uppercase; }
+                .esm-soc-value { color:var(--primary-text-color); font-size:20px; font-weight:800; }
+                .esm-soc-bar-bg { width:100%; height:10px; background:var(--divider-color, #444); border-radius:6px; overflow:hidden; margin-bottom:16px; }
+                .esm-soc-bar-fg { height:100%; border-radius:6px; background:linear-gradient(90deg,#1fbf75,#22d488); width:${soc}%; }
+
+                /* Diubah menjadi 3 kolom */
+                .esm-grid { display:grid; grid-template-columns: repeat(3, 1fr); row-gap:14px; column-gap:25px; margin-bottom:14px; }
+                .esm-item { display:flex; align-items:center; gap:8px; min-width:0; }
+                .esm-icon { width:22px; height:22px; min-width:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
+                .esm-icon ha-icon { --mdc-icon-size:12px; color:white; }
+                .esm-item-text { min-width:0; flex: 1; text-align: left; }
+                .esm-item-label { color:var(--secondary-text-color); font-size:11px; font-weight:400; margin-bottom:1px; white-space:nowrap; }
+                .esm-item-value { color:var(--primary-text-color); font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+                .esm-divider { height:1px; background:var(--divider-color, #444); margin:4px 0 10px 0; }
+                .esm-footer { display:flex; justify-content:space-between; align-items:center; color:var(--secondary-text-color); font-size:13px; }
+                .esm-footer b { color:var(--primary-text-color); }
+                .esm-footer .right { display:flex; align-items:center; gap:6px; }
+                .esm-footer ha-icon { --mdc-icon-size:16px; color:var(--secondary-text-color); }
+              </style>
+
+              <div class="esm-card">
+                <div>
+                  <div class="esm-header">
+                    <div class="esm-title">ESM-48100B1</div>
+                    <div class="esm-dot"></div>
+                  </div>
+
+                  <div class="esm-soc-row">
+                    <span class="esm-soc-label">SOC</span>
+                    <span class="esm-soc-value">${soc}%</span>
+                  </div>
+                  <div class="esm-soc-bar-bg"><div class="esm-soc-bar-fg"></div></div>
+
+                  <!-- Total 3 Baris x 3 Kolom (9 Item) -->
+                  <div class="esm-grid">
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#f5a623;"><ha-icon icon="mdi:flash"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">Voltage</div><div class="esm-item-value">${voltage} V</div></div>
+                    </div>
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#3b82f6;"><ha-icon icon="mdi:gauge"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">Current</div><div class="esm-item-value">${current} A</div></div>
+                    </div>
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#ef4444;"><ha-icon icon="mdi:flash"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">Power</div><div class="esm-item-value">${power} W</div></div>
+                    </div>
+
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#ef4444;"><ha-icon icon="mdi:minus"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">Min Cell</div><div class="esm-item-value">${minCell} V</div></div>
+                    </div>
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#f5a623;"><ha-icon icon="mdi:plus"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">Max Cell</div><div class="esm-item-value">${maxCell} V</div></div>
+                    </div>
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#3b82f6;"><ha-icon icon="mdi:minus"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">Diff Cell</div><div class="esm-item-value">${diffCell} mV</div></div>
+                    </div>
+
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#8b5cf6;"><ha-icon icon="mdi:thermometer"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">Temp</div><div class="esm-item-value">${temp} °C</div></div>
+                    </div>
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#10b981;"><ha-icon icon="mdi:heart-pulse"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">SOH</div><div class="esm-item-value">${soh} %</div></div>
+                    </div>
+                    <div class="esm-item">
+                      <div class="esm-icon" style="background:#ec4899;"><ha-icon icon="mdi:list-status"></ha-icon></div>
+                      <div class="esm-item-text"><div class="esm-item-label">Status</div><div class="esm-item-value">${status}</div></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="esm-divider"></div>
+                  <div class="esm-footer">
+                    <div>Cycles: <b>${cycles}</b></div>
+                    ${uptime ? `<div class="right"><ha-icon icon="mdi:clock-outline"></ha-icon> ${uptime}</div>` : ''}
+                  </div>
+                </div>
+              </div>
+              `;
+            ]]]
+        tap_action:
+          action: more-info
+      - type: heading
+        icon: mdi:information-slab-box-outline
+        heading: Lainnya
+        heading_style: title
+      - type: custom:mushroom-entity-card
+        entity: sensor.penghematan_listrik_rupiah
+        name: Penghematan Listrik
+        icon: mdi:cash-multiple
+        icon_color: green
+        grid_options:
+          columns: 12
+          rows: 1
+      - square: false
+        type: grid
+        columns: 2
+        cards:
+          - type: custom:mushroom-template-card
+            icon: mdi:clock-check
+            tap_action:
+              action: toggle
+              confirmation:
+                text: Apakah Anda yakin ingin sinkronisasi waktu MPPT ?
+            features_position: bottom
+            entity: button.monitoring_fahmi_plts_sync_time_to_mppt
+            primary: Sync MPPT time
+            color: blue
+            card_mod:
+              style: |
+                ha-card {
+                  --primary-text-color: white;
+                  background: rgba(var(--rgb-card-background-color), 0.8);
+                  box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+                  height: 53px !important; 
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: center;
+                }
+          - type: custom:mushroom-template-card
+            primary: Restart ESP
+            icon: mdi:reload
+            tap_action:
+              action: toggle
+              confirmation:
+                text: Apakah Anda yakin ingin restart perangkat?
+            features_position: bottom
+            color: orange
+            entity: button.monitoring_fahmi_plts_restart_esp
+            card_mod:
+              style: |
+                ha-card {
+                  --primary-text-color: white;
+                  background: rgba(var(--rgb-card-background-color), 0.8);
+                  box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+                  height: 53px !important; 
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: center;
+                }
+      - type: heading
+        icon: mdi:weather-partly-cloudy
+        heading: Prakiraan Cuaca
+        heading_style: title
+      - type: weather-forecast
+        entity: weather.forecast_rumah
+        forecast_type: daily
+        grid_options:
+          columns: 12
+          rows: 4
+    column_span: 1
+  - type: grid
+    cards: []
+    column_span: 2
+header:
+  layout: start
+  badges_position: bottom
+  badges_wrap: wrap
+max_columns: 4
+title: Monitoring
+icon: mdi:chart-areaspline-variant
+cards: []

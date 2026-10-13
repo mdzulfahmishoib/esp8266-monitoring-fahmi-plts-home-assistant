@@ -110,25 +110,15 @@ time:
       - pool.ntp.org
       - time.nist.gov
     on_time:
-      - hours: 0
-        minutes: 0
-        seconds: 10
-        then:
-          - lambda: |-
-              id(kwh_offset) = 0.0;
-              id(mppt_last_kwh) = 0.0;
-              id(sensor_daily_kwh).publish_state(0.0);
-              ESP_LOGI("DAILY_RESET", "Reset offset setelah MPPT midnight reset");
-
-      - hours: 0
-        minutes: 1
-        seconds: 0
+      - hours: 23
+        minutes: 59
+        seconds: 55
         then:
           - script.execute: sync_time_to_mppt
 
-      - hours: 23
-        minutes: 59
-        seconds: 58
+      - hours: 0
+        minutes: 0
+        seconds: 5
         then:
           - sensor.template.publish:
               id: sensor_ac_daily_kwh
@@ -143,6 +133,9 @@ time:
               }
               id(watt_max) = 0.0;
               id(sun_hour) = 0.0;
+              id(kwh_offset) = 0.0;
+              id(mppt_last_kwh) = 0.0;
+              id(sensor_daily_kwh).publish_state(0.0);
               id(kwh_offset) = 0.0;
               id(mppt_last_kwh) = 0.0;
               id(sensor_daily_kwh).publish_state(0.0);
@@ -536,7 +529,7 @@ switch:
       - globals.set: { id: mode_auto, value: "false" }
 
   - platform: template
-    name: "Posisikan PLTS Mendatar"
+    name: "Tracker Mendatar"
     id: sw_tracker_mendatar
     icon: mdi:swap-horizontal-bold
     optimistic: true
@@ -551,6 +544,17 @@ switch:
 
 # ── BUTTON ────────────────────────────────────────────────────────────────────
 button:
+  - platform: template
+    name: "Reset MPPT Daily Offset"
+    id: btn_reset_mppt_daily
+    icon: "mdi:restore"
+    on_press:
+      - lambda: |-
+          id(kwh_offset) = 0.0;
+          id(mppt_last_kwh) = 0.0;
+          id(sensor_daily_kwh).publish_state(0.0);
+          ESP_LOGI("MANUAL_RESET", "kwh_offset dan mppt_last_kwh berhasil di-reset ke 0.0!");
+
   - platform: template
     name: "Sync Time to MPPT"
     id: btn_sync_time
@@ -626,9 +630,9 @@ light:
           name: "Slow Blink"
           colors:
             - state: ON
-              duration: 100ms
+              duration: 1000ms
             - state: OFF
-              duration: 900ms
+              duration: 1000ms
 
 # ── SENSOR ────────────────────────────────────────────────────────────────────
 sensor:

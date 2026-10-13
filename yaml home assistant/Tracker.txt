@@ -1,0 +1,144 @@
+type: sections
+title: Tracker PLTS
+icon: mdi:solar-power-variant
+theme: Mushroom Shadow
+cards: []
+sections:
+  - type: grid
+    cards:
+      - square: false
+        type: grid
+        cards:
+          - type: custom:mushroom-template-card
+            primary: Tracker Maju
+            secondary: |
+              {{ 'Aktif' if is_state(entity, 'on') else 'Mati' }}
+            icon: mdi:arrow-right-bold
+            tap_action:
+              action: toggle
+            hold_action:
+              action: more-info
+            color: |
+              {{ 'green' if is_state(entity, 'on') else 'grey' }}
+            vertical: true
+            features_position: bottom
+            entity: switch.monitoring_fahmi_plts_tracker_maju
+            card_mod:
+              style: |
+                ha-card {
+                  background: rgba(var(--rgb-card-background-color), 0.8);
+                  border-radius: 20px;
+                  box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+                  height: 100px !important; /* Pastikan tingginya sama agar sejajar */
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: center;
+                }
+          - type: custom:mushroom-template-card
+            primary: Tracker Mundur
+            secondary: |
+              {{ 'Aktif' if is_state(entity, 'on') else 'Mati' }}
+            icon: mdi:arrow-left-bold
+            tap_action:
+              action: toggle
+            hold_action:
+              action: more-info
+            color: |
+              {{ 'orange' if is_state(entity, 'on') else 'grey' }}
+            vertical: true
+            features_position: bottom
+            entity: switch.monitoring_fahmi_plts_tracker_mundur
+            card_mod:
+              style: |
+                ha-card {
+                  background: rgba(var(--rgb-card-background-color), 0.8);
+                  border-radius: 20px;
+                  box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+                  height: 100px !important; /* Pastikan tingginya sama agar sejajar */
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: center;
+                }
+        title: Kontrol Manual Tracker
+        columns: 2
+      - square: false
+        type: grid
+        cards:
+          - type: custom:mushroom-template-card
+            primary: Dorong ke Barat
+            secondary: |
+              {{ 'Tunggu 2 menit' if is_state(entity, 'on') else 'Mati' }}
+            icon: mdi:arrow-right-bold
+            tap_action:
+              action: toggle
+            hold_action:
+              action: more-info
+            color: |
+              {{ 'green' if is_state(entity, 'on') else 'grey' }}
+            vertical: true
+            features_position: bottom
+            entity: switch.monitoring_fahmi_plts_tracker_maju_2_menit
+            card_mod:
+              style: |
+                ha-card {
+                  background: rgba(var(--rgb-card-background-color), 0.8);
+                  border-radius: 20px;
+                  box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+                  height: 100px !important;
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: center;
+                }
+          - type: custom:mushroom-template-card
+            primary: Tarik ke Timur
+            secondary: |
+              {{ 'Tunggu 2 menit' if is_state(entity, 'on') else 'Mati' }}
+            icon: mdi:arrow-left-bold
+            tap_action:
+              action: toggle
+            hold_action:
+              action: more-info
+            color: |
+              {{ 'green' if is_state(entity, 'on') else 'grey' }}
+            vertical: true
+            features_position: bottom
+            entity: switch.monitoring_fahmi_plts_tracker_mundur_2_menit
+            card_mod:
+              style: |
+                ha-card {
+                  background: rgba(var(--rgb-card-background-color), 0.8);
+                  border-radius: 20px;
+                  box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+                  height: 100px !important;
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: center;
+                }
+        columns: 2
+      - type: custom:mushroom-template-card
+        primary: Posisikan Tracker Mendatar
+        secondary: |
+          {{ 'Tunggu 5 menit' if is_state(entity, 'on') else 'Mati' }}
+        icon: mdi:solar-power-variant
+        tap_action:
+          action: toggle
+        hold_action:
+          action: more-info
+        color: |
+          {{ 'green' if is_state(entity, 'on') else 'grey' }}
+        features_position: bottom
+        grid_options:
+          columns: 12
+          rows: 2
+        vertical: true
+        entity: switch.monitoring_fahmi_plts_posisikan_plts_mendatar
+        card_mod:
+          style: |
+            ha-card {
+              background: rgba(var(--rgb-card-background-color), 0.8);
+              border-radius: 20px;
+              box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+            }
+    column_span: 1
+visible:
+  - user: ff48597886e54c749e835d729c220087
